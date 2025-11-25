@@ -1,0 +1,8 @@
+{
+  "name": "Lumina Chat",
+  "description": "Современный мессенджер с минималистичным дизайном и встроенным ИИ-ассистентом на базе Gemini.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
