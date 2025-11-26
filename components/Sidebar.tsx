@@ -1,6 +1,6 @@
 import React from 'react';
 import { Chat, User } from '../types';
-import { Search, Menu, PenSquare, Settings, UserPlus, Phone, Hash, Mic, Gamepad2 } from 'lucide-react';
+import { Search, Menu, PenSquare, Settings, UserPlus, Phone, Hash, Mic, Gamepad2, Trash2 } from 'lucide-react';
 
 interface SidebarProps {
   chats: Chat[];
@@ -14,6 +14,7 @@ interface SidebarProps {
   otherUsers: User[]; 
   onStartChat: (user: User) => void;
   onOpenGame: () => void;
+  onDeleteChat: (chatId: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -27,7 +28,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSearchChange,
   otherUsers,
   onStartChat,
-  onOpenGame
+  onOpenGame,
+  onDeleteChat
 }) => {
   
   const formatTime = (date: Date | any | undefined) => {
@@ -131,7 +133,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div
                 key={chat.id}
                 onClick={() => onSelectChat(chat.id)}
-                className={`group flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all duration-200 ${
+                className={`group flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all duration-200 relative pr-10 ${
                   isSelected 
                     ? 'bg-violet-100 dark:bg-violet-600/20 shadow-sm border border-violet-200 dark:border-violet-500/30' 
                     : 'hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent'
@@ -165,6 +167,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </p>
                   </div>
                 </div>
+
+                {/* Delete Button (Visible on Hover) */}
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteChat(chat.id);
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-full opacity-0 group-hover:opacity-100 transition-all duration-200"
+                    title="Удалить чат"
+                >
+                    <Trash2 size={16} />
+                </button>
               </div>
             );
           })

@@ -12,14 +12,15 @@ import { auth, db, isFirebaseConfigured } from './src/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { 
   collection, query, where, onSnapshot, orderBy, 
-  addDoc, doc, updateDoc, getDoc, getDocs, setDoc, Timestamp 
+  addDoc, doc, updateDoc, getDoc, getDocs, setDoc, Timestamp, deleteDoc 
 } from 'firebase/firestore';
-import { AI_USER } from './constants';
+import { AI_USER, NOTIFICATION_SOUND } from './constants';
 
 const THEME_KEY = 'lumini_theme';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [showDevSetup, setShowDevSetup] = useState(false);
   
   // STATE SPLIT: Chats list and Active Messages are now separate to prevent conflicts
   const [chats, setChats] = useState<Chat[]>([]);
@@ -45,9 +46,46 @@ const App: React.FC = () => {
 
   // --- 1. EFFECTS (Must run unconditionally) ---
 
+  // Request Notification Permission on Mount
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+  }, []);
+
+  const playNotificationSound = () => {
+      try {
+          const audio = new Audio(NOTIFICATION_SOUND);
+          audio.volume = 0.5;
+          audio.play().catch(e => console.log("Audio play failed (interaction needed)", e));
+      } catch (e) {
+          console.error("Sound error", e);
+      }
+  };
+
+  const sendNotification = (title: string, body: string, icon?: string) => {
+      if (document.hidden || !document.hasFocus()) {
+          // System Notification
+          if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification(title, {
+                  body,
+                  icon: icon || '/vite.svg', // Fallback icon
+                  tag: 'lumini-message' // Prevents stacking too many notifications
+              });
+          }
+      }
+      // Always play sound if message arrives and we are not looking at it directly
+      playNotificationSound();
+  };
+
   // Initial Auth Check & Theme Load
   useEffect(() => {
-    if (!isFirebaseConfigured) return;
+    // We run this hook regardless of config status, but logic inside guards execution.
+    // However, for the initial load, if firebase is not configured, we just finish loading.
+    if (!isFirebaseConfigured) {
+        setLoading(false);
+        return;
+    }
 
     // Load Theme
     const savedTheme = localStorage.getItem(THEME_KEY);
@@ -182,7 +220,7 @@ const App: React.FC = () => {
 
   // --- 2. DATA LISTENERS ---
 
-  // A. Load Chats List (Sidebar)
+  // A. Load Chats List (Sidebar) & Listen for Notifications
   useEffect(() => {
       if (!isFirebaseConfigured || !currentUser) return;
 
@@ -192,6 +230,29 @@ const App: React.FC = () => {
       );
 
       const unsubscribe = onSnapshot(q, async (snapshot) => {
+          
+          // --- NOTIFICATION LOGIC (PRO LEVEL) ---
+          snapshot.docChanges().forEach((change) => {
+              if (change.type === 'modified') {
+                  const chatData = change.doc.data();
+                  const lastMsg = chatData.lastMessage as Message | undefined;
+
+                  if (lastMsg && 
+                      lastMsg.senderId !== currentUser.id && 
+                      (Math.abs(Date.now() - (lastMsg.timestamp?.toDate ? lastMsg.timestamp.toDate().getTime() : Date.now())) < 5000)
+                  ) {
+                      const isChatOpen = selectedChatId === change.doc.id;
+                      if (!isChatOpen || document.hidden) {
+                          const otherUserId = chatData.participantIds.find((id: string) => id !== currentUser.id);
+                          let senderName = "Новое сообщение";
+                          if (otherUserId === AI_USER.id) senderName = AI_USER.name;
+                          
+                          sendNotification(senderName, lastMsg.text || (lastMsg.attachments?.length ? '📎 Вложение' : 'Сообщение'));
+                      }
+                  }
+              }
+          });
+
           const loadedDataPromises = snapshot.docs.map(async (chatDoc) => {
               const chatData = chatDoc.data();
               const otherUserId = chatData.participantIds.find((id: string) => id !== currentUser.id);
@@ -204,7 +265,6 @@ const App: React.FC = () => {
                       const userSnap = await getDoc(doc(db, "users", otherUserId));
                       if (userSnap.exists()) {
                           const uData = userSnap.data() as any;
-                          // Check online status based on lastActive timestamp (5 min threshold)
                           const lastActive = uData.lastActive?.toDate ? uData.lastActive.toDate() : new Date(0);
                           const isOnline = (Date.now() - lastActive.getTime()) < 5 * 60 * 1000;
                           
@@ -229,7 +289,7 @@ const App: React.FC = () => {
                   id: chatDoc.id,
                   participantIds: chatData.participantIds,
                   participants: participants,
-                  messages: [], // We don't load full messages for the sidebar list anymore
+                  messages: [], 
                   unreadCount: 0,
                   lastMessage: lastMsg,
                   updatedAt: chatData.updatedAt?.toDate()
@@ -238,7 +298,6 @@ const App: React.FC = () => {
 
           const freshChats = await Promise.all(loadedDataPromises);
 
-          // Client-side sort
           freshChats.sort((a, b) => {
              const timeA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
              const timeB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
@@ -251,16 +310,15 @@ const App: React.FC = () => {
       });
 
       return () => unsubscribe();
-  }, [currentUser]); 
+  }, [currentUser, selectedChatId]); 
 
-  // B. Load Messages for Selected Chat (Active Window)
+  // B. Load Messages for Selected Chat
   useEffect(() => {
       if (!isFirebaseConfigured || !selectedChatId) {
           setActiveMessages([]);
           return;
       }
 
-      // Real-time listener for the SPECIFIC chat's messages
       const q = query(
           collection(db, "chats", selectedChatId, "messages"),
           orderBy("timestamp", "asc")
@@ -380,6 +438,20 @@ const App: React.FC = () => {
       }
   };
 
+  const handleDeleteChat = async (chatId: string) => {
+      if (!window.confirm("Вы уверены, что хотите удалить этот чат? Переписка будет удалена.")) return;
+      try {
+          await deleteDoc(doc(db, "chats", chatId));
+          if (selectedChatId === chatId) {
+              setSelectedChatId(null);
+              setIsMobileChatOpen(false);
+          }
+      } catch (e: any) {
+          console.error("Error deleting chat", e);
+          if (e.code === 'permission-denied') setPermissionError(true);
+      }
+  };
+
   const handleSendMessage = async (text: string, attachments: Attachment[] = []) => {
     if (!selectedChatId || !currentUser) return;
 
@@ -480,8 +552,8 @@ const App: React.FC = () => {
 
   // --- RENDERING ---
 
-  if (!isFirebaseConfigured) {
-    return <FirebaseSetup />;
+  if (showDevSetup) {
+      return <FirebaseSetup onBack={() => setShowDevSetup(false)} />;
   }
 
   if (permissionError) {
@@ -498,7 +570,7 @@ const App: React.FC = () => {
   }
 
   if (!currentUser) {
-    return <AuthScreen onLogin={handleLogin} />;
+    return <AuthScreen onLogin={handleLogin} onOpenDevSettings={() => setShowDevSetup(true)} />;
   }
 
   const selectedChat = chats.find((c) => c.id === selectedChatId) || null;
@@ -518,6 +590,7 @@ const App: React.FC = () => {
           otherUsers={otherUsers}
           onStartChat={handleStartChat}
           onOpenGame={() => setIsGameOpen(true)}
+          onDeleteChat={handleDeleteChat}
         />
       </div>
 

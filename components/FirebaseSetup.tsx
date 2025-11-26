@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
-import { Save, AlertCircle, Database, CheckCircle2 } from 'lucide-react';
+import { Save, AlertCircle, Database, ArrowLeft } from 'lucide-react';
 
-export const FirebaseSetup: React.FC = () => {
+interface FirebaseSetupProps {
+  onBack?: () => void;
+}
+
+export const FirebaseSetup: React.FC<FirebaseSetupProps> = ({ onBack }) => {
   const [apiKey, setApiKey] = useState('');
   const [authDomain, setAuthDomain] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -14,15 +18,11 @@ export const FirebaseSetup: React.FC = () => {
 
   const handleJsonPaste = () => {
     try {
-      // Try to find the object in the pasted text even if it contains "const firebaseConfig = { ... }"
       const jsonStr = jsonInput.substring(
         jsonInput.indexOf('{'), 
         jsonInput.lastIndexOf('}') + 1
       );
       
-      // Allow for loose JSON (keys without quotes) by wrapping simple eval logic or using regex replacement
-      // For safety/simplicity, we ask user to paste valid JSON or we parse manually.
-      // A simple regex approach to quote keys:
       const fixedJson = jsonStr.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2": ').replace(/'/g, '"');
       
       const config = JSON.parse(fixedJson);
@@ -57,33 +57,32 @@ export const FirebaseSetup: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4">
       <div className="max-w-2xl w-full bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border border-slate-700">
-        <div className="p-6 border-b border-slate-700 bg-gradient-to-r from-violet-900 to-slate-800">
-          <div className="flex items-center gap-3 mb-2">
+        <div className="p-6 border-b border-slate-700 bg-gradient-to-r from-violet-900 to-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-3">
             <Database className="text-violet-400" size={32} />
             <h1 className="text-2xl font-bold text-white">Настройка Базы Данных</h1>
           </div>
-          <p className="text-slate-300">
-            Для работы мессенджера требуется подключение к Firebase (Google Cloud).
-            Это бесплатно и безопасно.
-          </p>
+          {onBack && (
+              <button 
+                onClick={onBack}
+                className="p-2 hover:bg-slate-700 rounded-full transition-colors"
+              >
+                  <ArrowLeft size={24} />
+              </button>
+          )}
         </div>
 
         <div className="p-6 space-y-6">
           <div className="bg-blue-900/20 border border-blue-500/30 p-4 rounded-xl flex gap-3">
              <AlertCircle className="text-blue-400 flex-shrink-0" size={24} />
              <div className="text-sm text-slate-300">
-                <p className="font-bold text-blue-300 mb-1">Почему я вижу этот экран?</p>
-                Ваш проект ещё не подключен к облаку. Чтобы чат работал между устройствами, нужно ввести ключи доступа.
-                Данные сохранятся только в вашем браузере.
+                <p className="font-bold text-blue-300 mb-1">Режим разработчика</p>
+                Здесь вы можете подключить свой проект Firebase. Данные сохраняются локально в вашем браузере.
              </div>
           </div>
 
           <div className="space-y-4">
-             <h3 className="font-semibold text-lg border-b border-slate-700 pb-2">Способ 1: Вставить JSON (Рекомендуется)</h3>
-             <p className="text-xs text-slate-400">
-               Зайдите в Firebase Console {'>'} Project Settings {'>'} General {'>'} Your Apps {'>'} Config.
-               Скопируйте весь объект <code>firebaseConfig</code>.
-             </p>
+             <h3 className="font-semibold text-lg border-b border-slate-700 pb-2">Способ 1: Вставить JSON</h3>
              <textarea 
                 value={jsonInput}
                 onChange={(e) => setJsonInput(e.target.value)}

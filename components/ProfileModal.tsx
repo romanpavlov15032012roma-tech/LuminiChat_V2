@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { User } from '../types';
-import { X, Camera, Save, LogOut, Moon, Sun, Copy, Check, Hash, Mail, Phone, Calendar } from 'lucide-react';
+import { X, Camera, Save, LogOut, Moon, Sun, Copy, Check, Hash, Mail, Phone, Calendar, AlertTriangle } from 'lucide-react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../src/firebase';
 
@@ -27,6 +27,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [avatar, setAvatar] = useState(user.avatar);
   const [isSaving, setIsSaving] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Reset state if user prop changes (e.g. switching between different profiles)
@@ -177,7 +178,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 </div>
             )}
 
-            {/* Theme Toggle (Visible for everyone to switch their own view preference) */}
+            {/* Theme Toggle */}
             <div className="flex items-center justify-between py-2 border-t border-slate-100 dark:border-slate-800 mt-4 pt-4">
                 <span className="text-sm font-medium text-slate-700 dark:text-slate-300 flex items-center gap-2">
                     {isDarkMode ? <Moon size={16} /> : <Sun size={16} />}
@@ -193,28 +194,53 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
             {/* Actions (Only for Current User) */}
             {!isReadOnly && onLogout && (
-                <div className="pt-2 flex gap-3">
-                    <button 
-                        onClick={onLogout}
-                        className="flex-1 py-3 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10 dark:hover:text-red-400 text-slate-600 dark:text-slate-300 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700 hover:border-red-200 dark:hover:border-red-500/30"
-                    >
-                        <LogOut size={18} />
-                        <span>Выйти</span>
-                    </button>
-                    <button 
-                        onClick={handleSave}
-                        disabled={isSaving}
-                        className="flex-[2] py-3 px-4 bg-violet-600 hover:bg-violet-500 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2 shadow-lg shadow-violet-600/20"
-                    >
-                        {isSaving ? (
-                            <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                        ) : (
-                            <>
-                                <Save size={18} />
-                                <span>Сохранить</span>
-                            </>
-                        )}
-                    </button>
+                <div className="pt-2">
+                    {!showLogoutConfirm ? (
+                        <div className="flex gap-3">
+                            <button 
+                                onClick={() => setShowLogoutConfirm(true)}
+                                className="flex-1 py-3 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10 dark:hover:text-red-400 text-slate-600 dark:text-slate-300 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700 hover:border-red-200 dark:hover:border-red-500/30"
+                            >
+                                <LogOut size={18} />
+                                <span>Выйти</span>
+                            </button>
+                            <button 
+                                onClick={handleSave}
+                                disabled={isSaving}
+                                className="flex-[2] py-3 px-4 bg-violet-600 hover:bg-violet-500 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2 shadow-lg shadow-violet-600/20"
+                            >
+                                {isSaving ? (
+                                    <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                                ) : (
+                                    <>
+                                        <Save size={18} />
+                                        <span>Сохранить</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    ) : (
+                         <div className="bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/30 p-3 rounded-xl animate-fade-in">
+                            <p className="text-sm text-red-600 dark:text-red-300 font-medium mb-3 flex items-center gap-2">
+                                <AlertTriangle size={16} />
+                                Вы уверены, что хотите выйти?
+                            </p>
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={() => setShowLogoutConfirm(false)}
+                                    className="flex-1 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 text-sm hover:bg-slate-50"
+                                >
+                                    Отмена
+                                </button>
+                                <button 
+                                    onClick={onLogout}
+                                    className="flex-1 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm shadow-md shadow-red-500/20"
+                                >
+                                    Да, выйти
+                                </button>
+                            </div>
+                         </div>
+                    )}
                 </div>
             )}
         </div>

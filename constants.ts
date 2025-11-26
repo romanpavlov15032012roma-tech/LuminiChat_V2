@@ -2,6 +2,8 @@ import { User, Chat } from './types';
 
 // CURRENT_USER is now handled dynamically in App.tsx via Auth
 
+export const NOTIFICATION_SOUND = 'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3';
+
 export const AI_USER: User = {
   id: 'gemini_ai',
   name: 'Lumini AI',

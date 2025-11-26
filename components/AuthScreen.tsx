@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { User } from '../types';
-import { Sparkles, ArrowRight, Lock, AlertCircle } from 'lucide-react';
-import { auth, db } from '../src/firebase';
+import { Sparkles, ArrowRight, Lock, AlertCircle, Database } from 'lucide-react';
+import { auth, db, isFirebaseConfigured } from '../src/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 
 interface AuthScreenProps {
   onLogin: (user: User) => void;
+  onOpenDevSettings: () => void;
 }
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
+export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onOpenDevSettings }) => {
   const [isRegistering, setIsRegistering] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -21,6 +22,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    // Check configuration first
+    if (!isFirebaseConfigured) {
+        setError('База данных не подключена. Нажмите "Для разработчиков" внизу экрана.');
+        return;
+    }
+
     setLoading(true);
 
     try {
@@ -203,6 +211,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
              <Lock size={12} />
              <span>Firebase Secure Authentication</span>
           </div>
+        </div>
+
+        {/* Developer Button */}
+        <div className="absolute bottom-4 left-4 z-20">
+            <button 
+                onClick={onOpenDevSettings}
+                className="flex items-center gap-2 text-slate-400 dark:text-slate-600 hover:text-slate-600 dark:hover:text-slate-300 text-xs px-3 py-1.5 rounded-full hover:bg-slate-200 dark:hover:bg-slate-900/50 transition-colors"
+            >
+                <Database size={12} />
+                <span>Для разработчиков</span>
+            </button>
         </div>
     </div>
   );
