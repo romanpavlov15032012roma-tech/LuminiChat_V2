@@ -9,28 +9,52 @@ const isValidConfig = (cfg: any) => {
   return cfg && cfg.apiKey && cfg.apiKey !== "AIzaSyD-YOUR-API-KEY-HERE" && cfg.projectId;
 };
 
-// 1. Try to get config from LocalStorage
-const storedConfigStr = localStorage.getItem('lumini_firebase_config');
 let firebaseConfig = null;
 let isFirebaseConfigured = false;
 
-if (storedConfigStr) {
-  try {
-    const parsed = JSON.parse(storedConfigStr);
-    if (isValidConfig(parsed)) {
-      firebaseConfig = parsed;
-      isFirebaseConfigured = true;
+// 1. Priority: Check Environment Variables (Vercel / .env)
+// IMPORTANT: Vite only exposes variables starting with VITE_
+const envConfig = {
+  apiKey: (import.meta as any).env.VITE_FIREBASE_API_KEY,
+  authDomain: (import.meta as any).env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: (import.meta as any).env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: (import.meta as any).env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: (import.meta as any).env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: (import.meta as any).env.VITE_FIREBASE_APP_ID
+};
+
+// Debug log to check if env variables are loaded (checks existence, not values for security)
+console.log("Checking Environment Variables:", {
+  hasApiKey: !!envConfig.apiKey,
+  hasProjectId: !!envConfig.projectId
+});
+
+if (envConfig.apiKey && envConfig.projectId) {
+  firebaseConfig = envConfig;
+  isFirebaseConfigured = true;
+  console.log("✅ Firebase configured via Environment Variables (Vercel/Env)");
+} else {
+  // 2. Fallback: Try to get config from LocalStorage (Manual Setup)
+  const storedConfigStr = localStorage.getItem('lumini_firebase_config');
+  if (storedConfigStr) {
+    try {
+      const parsed = JSON.parse(storedConfigStr);
+      if (isValidConfig(parsed)) {
+        firebaseConfig = parsed;
+        isFirebaseConfigured = true;
+        console.log("✅ Firebase configured via LocalStorage");
+      }
+    } catch (e) {
+      console.error("Invalid stored firebase config", e);
     }
-  } catch (e) {
-    console.error("Invalid stored firebase config", e);
   }
 }
 
-// 2. If no valid config, use a dummy placeholder to prevent import crashes,
-// but keep isFirebaseConfigured = false so App.tsx knows to show the Setup screen.
+// 3. If no valid config, use a dummy placeholder
 if (!firebaseConfig) {
+  console.warn("⚠️ No Firebase config found. App will require manual setup.");
   firebaseConfig = {
-    apiKey: "AIzaSyD-PLACEHOLDER", // Invalid key
+    apiKey: "AIzaSyD-PLACEHOLDER",
     authDomain: "placeholder.firebaseapp.com",
     projectId: "placeholder",
     storageBucket: "placeholder.appspot.com",
@@ -43,20 +67,13 @@ let app: any;
 let auth: Auth;
 let db: Firestore;
 
-// Initialize safely
 try {
-  // Use named import initializeApp
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
 } catch (error) {
   console.error("Firebase initialization failed:", error);
-  // Re-throw or handle in UI. 
-  // Since we check isFirebaseConfigured in App.tsx, we can safely ignore specific init errors here 
-  // as the UI will redirect to setup if keys are bad.
   isFirebaseConfigured = false;
-  // We cast to any to satisfy TS strictness for the export, 
-  // but App.tsx guards against using these if !isFirebaseConfigured
   auth = {} as unknown as Auth;
   db = {} as unknown as Firestore;
 }
