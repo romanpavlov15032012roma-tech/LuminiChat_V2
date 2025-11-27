@@ -162,6 +162,21 @@ const App: React.FC = () => {
                       timestamp: chatData.lastMessage.timestamp?.toDate ? chatData.lastMessage.timestamp.toDate() : new Date()
                   };
               }
+              
+              // Calculate typing status
+              let isTyping = false;
+              if (chatData.typing) {
+                 const now = Date.now();
+                 // Check if any USER ID other than current user has typed in last 5 seconds
+                 Object.entries(chatData.typing).forEach(([uid, ts]: [string, any]) => {
+                     if (uid !== currentUser.id) {
+                         const date = ts?.toDate ? ts.toDate() : new Date(ts);
+                         if (now - date.getTime() < 5000) {
+                             isTyping = true;
+                         }
+                     }
+                 });
+              }
 
               return {
                   id: chatDoc.id,
@@ -171,6 +186,8 @@ const App: React.FC = () => {
                   unreadCount: 0,
                   lastMessage: lastMsg,
                   updatedAt: chatData.updatedAt?.toDate(),
+                  typing: chatData.typing,
+                  isTyping: isTyping,
                   isGroup: chatData.isGroup,
                   groupName: chatData.groupName,
                   groupAvatar: chatData.groupAvatar,

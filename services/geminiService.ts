@@ -8,19 +8,20 @@ const SYSTEM_INSTRUCTION = `Ты полезный и дружелюбный ас
 Ты умеешь:
 1. Отвечать на вопросы кратко и по существу.
 2. Поддерживать диалог, используя контекст.
-3. Генерировать видео с помощью модели Veo, если пользователь попросит (например: "сгенерируй видео", "создай видео").
+3. Генерировать видео с помощью модели Veo 3. Если пользователь пишет "сделай видео", "сгенерируй видео" или описывает сцену для видео, ты должен подтвердить это.
 4. Использовать эмодзи для придания эмоциональной окраски.
 5. Форматировать текст (списки, жирный шрифт).
 
 Твои ограничения:
-- Если тебя просят создать видео, просто ответь подтверждением, что ты приступаешь к генерации (код приложения сам обработает запрос к видео-модели).
-- Не придумывай функции, которых нет в интерфейсе (например, отправка денег).
+- Если запрос касается создания видео, отвечай в духе: "Конечно, начинаю генерацию видео..." (приложение само перехватит этот запрос и отправит его в модель Veo).
+- Не говори, что ты не умеешь генерировать видео. Ты умеешь.
 
 Стиль общения: вежливый, современный, иногда с юмором.`;
 
 async function generateVideo(prompt: string): Promise<Attachment | null> {
     try {
-        console.log("Starting video generation with Veo...");
+        console.log("Starting video generation with Veo for prompt:", prompt);
+        
         let operation = await ai.models.generateVideos({
             model: 'veo-3.1-fast-generate-preview',
             prompt: prompt,
@@ -31,11 +32,13 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
             }
         });
 
+        console.log("Video operation started:", operation);
+
         // Polling loop
         while (!operation.done) {
             await new Promise(resolve => setTimeout(resolve, 5000)); // Check every 5s
             operation = await ai.operations.getVideosOperation({operation: operation});
-            console.log("Checking video status...");
+            console.log("Checking video status...", operation.metadata?.state);
         }
 
         const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
@@ -55,7 +58,7 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
                        id: Date.now().toString(),
                        type: 'video',
                        url: reader.result as string,
-                       name: 'AI Generated Video.mp4',
+                       name: 'AI_Gen_Veo3.mp4',
                        size: '720p'
                    });
                 };
@@ -76,22 +79,30 @@ export const sendMessageToGemini = async (
 ): Promise<{ text: string, attachments: Attachment[] }> => {
   try {
     const lowerMsg = message.toLowerCase();
-    const isVideoRequest = lowerMsg.includes('сгенерируй видео') || 
-                           lowerMsg.includes('создай видео') || 
-                           lowerMsg.includes('create video') || 
-                           lowerMsg.includes('generate video');
+    
+    // Improved detection logic
+    const videoKeywords = ['видео', 'video', 'клип', 'ролик'];
+    const actionKeywords = ['сгенерируй', 'создай', 'сделай', 'generate', 'create', 'make', 'покажи'];
+    
+    const hasVideoKeyword = videoKeywords.some(k => lowerMsg.includes(k));
+    const hasActionKeyword = actionKeywords.some(k => lowerMsg.includes(k));
+    
+    // Check for specific phrases or combination
+    const isVideoRequest = (hasVideoKeyword && hasActionKeyword) || 
+                           lowerMsg.includes('veo') || 
+                           lowerMsg.includes('снять видео');
 
     if (isVideoRequest) {
         // Handle Video Generation
         const videoAttachment = await generateVideo(message);
         if (videoAttachment) {
             return {
-                text: "Готово! Вот видео по вашему запросу 🎥",
+                text: "✨ Видео готово! Сгенерировано с помощью Veo 3.",
                 attachments: [videoAttachment]
             };
         } else {
             return {
-                text: "Извините, не удалось сгенерировать видео. Попробуйте еще раз или уточните запрос.",
+                text: "Извините, произошла ошибка при генерации видео. Попробуйте изменить запрос.",
                 attachments: []
             };
         }

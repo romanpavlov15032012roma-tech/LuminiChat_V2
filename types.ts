@@ -43,12 +43,17 @@ export interface Chat {
   messages: Message[];
   unreadCount: number;
   lastMessage?: Message;
-  isTyping?: boolean;
   updatedAt?: any;
+  
+  // Key: userId, Value: Timestamp of last keystroke
+  typing?: { [userId: string]: any }; 
   
   // Group Chat Fields
   isGroup?: boolean;
   groupName?: string;
   groupAvatar?: string;
   adminIds?: string[];
+  
+  // Helper for UI (computed)
+  isTyping?: boolean; 
 }

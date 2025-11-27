@@ -6,7 +6,7 @@ import {
   Send, Paperclip, Smile, MoreVertical, Phone, Video, ArrowLeft, Bot, 
   X, FileText, Mic, MicOff, VideoOff, PhoneOff, Download, Pencil, Check, CheckCheck, Clock, Play, PlayCircle, Camera
 } from 'lucide-react';
-import { doc, onSnapshot, updateDoc, collection, addDoc, getDoc, deleteDoc, setDoc, addDoc as firestoreAddDoc } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, collection, addDoc, getDoc, deleteDoc, setDoc, addDoc as firestoreAddDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { db } from '../src/firebase';
 
 interface ChatWindowProps {
@@ -79,6 +79,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
   
   const recordingPreviewVideoRef = useRef<HTMLVideoElement>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -404,7 +405,30 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
       setInputText('');
       setSelectedFiles([]);
       setShowEmojiPicker(false);
+      
+      // Stop typing immediately when sent
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      updateDoc(doc(db, "chats", chat.id), {
+          [`typing.${currentUser.id}`]: deleteField()
+      });
     }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      setInputText(e.target.value);
+      
+      // Typing indicator logic
+      updateDoc(doc(db, "chats", chat.id), {
+          [`typing.${currentUser.id}`]: serverTimestamp()
+      });
+
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      
+      typingTimeoutRef.current = setTimeout(() => {
+          updateDoc(doc(db, "chats", chat.id), {
+              [`typing.${currentUser.id}`]: deleteField()
+          });
+      }, 3000);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -518,6 +542,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
     }
   };
 
+  const getHeaderStatus = () => {
+      if (chat.isTyping) return 'Печатает...';
+      if (isGroup) return `${chat.participants.length} участников`;
+      if (participant?.isAi) return 'ИИ Ассистент';
+      return isOnline ? 'В сети' : 'Был(а) недавно';
+  };
+
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-[#0B1120] relative overflow-hidden transition-colors duration-200">
       
@@ -535,8 +566,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                     {displayName}
                     {participant?.isAi && <Bot size={18} className="text-violet-500 dark:text-violet-400" />}
                 </h2>
-                <div className={`text-xs flex items-center gap-1.5 ${isOnline ? 'text-emerald-500 dark:text-emerald-400 font-medium' : 'text-slate-500 dark:text-slate-400'}`}>
-                    {isGroup ? `${chat.participants.length} участников` : participant?.isAi ? 'ИИ Ассистент' : isOnline ? 'В сети' : 'Был(а) недавно'}
+                <div className={`text-xs flex items-center gap-1.5 ${chat.isTyping ? 'text-violet-500 animate-pulse font-bold' : isOnline ? 'text-emerald-500 dark:text-emerald-400 font-medium' : 'text-slate-500 dark:text-slate-400'}`}>
+                    {getHeaderStatus()}
                 </div>
              </div>
           </div>
@@ -718,7 +749,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
             </div>
           );
         })}
-        {chat.isTyping && <div className="text-sm text-slate-500 ml-12">Печатает...</div>}
+        {chat.isTyping && <div className="text-sm text-slate-500 ml-12 animate-pulse">Печатает...</div>}
         <div ref={messagesEndRef} />
       </div>
 
@@ -776,7 +807,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                 
                 <textarea
                     value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
+                    onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
                     placeholder={selectedFiles.length > 0 ? "Добавьте подпись..." : "Напишите сообщение..."}
                     className="flex-1 bg-transparent text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 resize-none focus:outline-none max-h-32 py-2"
