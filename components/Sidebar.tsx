@@ -1,6 +1,7 @@
+
 import React from 'react';
 import { Chat, User } from '../types';
-import { Search, Menu, PenSquare, Settings, UserPlus, Phone, Hash, Mic, Gamepad2, Trash2, Users, Plus } from 'lucide-react';
+import { Search, Settings, UserPlus, Phone, Hash, Mic, Gamepad2, Trash2, Users, Plus } from 'lucide-react';
 
 interface SidebarProps {
   chats: Chat[];
@@ -122,8 +123,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 title="Создать группу"
             >
                <Users size={16} />
-               <span className="hidden xl:inline">Группа</span>
-               <Plus size={14} className="xl:hidden" />
+               <span>Группа</span>
             </button>
         </div>
       </div>

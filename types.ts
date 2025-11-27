@@ -45,8 +45,10 @@ export interface Chat {
   lastMessage?: Message;
   isTyping?: boolean;
   updatedAt?: any;
+  
+  // Group Chat Fields
   isGroup?: boolean;
   groupName?: string;
   groupAvatar?: string;
-  groupAdminId?: string;
+  adminIds?: string[];
 }

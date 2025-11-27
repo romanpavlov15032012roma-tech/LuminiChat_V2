@@ -276,30 +276,22 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
       e.preventDefault(); 
       if (isRecording) return;
       setRecordMode(mode);
+      // Small delay to filter out accidental taps
       pressTimerRef.current = setTimeout(() => {
           startRecording(mode);
-      }, 200);
+      }, 150);
   };
 
   const handleRecordButtonUp = (e: React.PointerEvent) => {
       e.preventDefault();
+      // If timer pending, it was a short tap -> cancel
       if (pressTimerRef.current) {
           clearTimeout(pressTimerRef.current);
           pressTimerRef.current = null;
       } 
+      // If recording started -> Stop & Send
       if (isRecording) {
           stopRecording(true);
-      }
-  };
-
-  const handleRecordButtonLeave = (e: React.PointerEvent) => {
-      // Only cancel if we are recording. If we were just pressing (timer valid), clear it.
-      if (pressTimerRef.current) {
-          clearTimeout(pressTimerRef.current);
-          pressTimerRef.current = null;
-      }
-      if (isRecording) {
-          cancelRecording();
       }
   };
 
@@ -750,7 +742,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                     <button 
                         onPointerDown={(e) => handleRecordButtonDown('video', e)}
                         onPointerUp={handleRecordButtonUp}
-                        onPointerLeave={handleRecordButtonLeave}
                         className={`p-2 rounded-xl transition-all active:scale-95 ${isRecording && recordMode === 'video' ? 'bg-red-500 text-white scale-110 shadow-lg shadow-red-500/50' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-violet-100 hover:text-violet-600 dark:hover:bg-violet-900/30 dark:hover:text-violet-300'} ${isRecording && recordMode !== 'video' ? 'opacity-0 pointer-events-none w-0 p-0 overflow-hidden' : ''}`}
                     >
                         <Camera size={20} />
@@ -760,7 +751,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                     <button 
                         onPointerDown={(e) => handleRecordButtonDown('audio', e)}
                         onPointerUp={handleRecordButtonUp}
-                        onPointerLeave={handleRecordButtonLeave}
                         className={`p-2 rounded-xl transition-all active:scale-95 ${isRecording && recordMode === 'audio' ? 'bg-red-500 text-white scale-110 shadow-lg shadow-red-500/50' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-violet-100 hover:text-violet-600 dark:hover:bg-violet-900/30 dark:hover:text-violet-300'} ${isRecording && recordMode !== 'audio' ? 'opacity-0 pointer-events-none w-0 p-0 overflow-hidden' : ''}`}
                     >
                         <Mic size={20} />
@@ -771,3 +761,4 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
       </div>
     </div>
   );
+};
