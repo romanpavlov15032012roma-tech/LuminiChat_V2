@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { Attachment } from "../types";
 
@@ -5,7 +6,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const SYSTEM_INSTRUCTION = `Ты — Lumina, продвинутый ИИ-ассистент. 
 Твои возможности:
-1. 🎨 ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты используешь модель Imagen 3.
+1. 🎨 ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты используешь свои встроенные возможности генерации.
 2. 🎬 ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип", "покажи видео" — ты используешь модель Veo.
 3. 👀 ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь.
 4. ЭМОЦИИ: Используй эмодзи, чтобы оживить диалог.
@@ -55,39 +56,40 @@ const compressImage = (base64Str: string): Promise<string> => {
 
 async function generateImage(prompt: string): Promise<Attachment | null> {
     try {
-        console.log("🎨 Starting image generation with Imagen 3 for prompt:", prompt);
+        console.log("🎨 Starting image generation with Gemini 2.5 Flash Image for prompt:", prompt);
         
-        // Use the dedicated generateImages method for Imagen models
-        const response = await ai.models.generateImages({
-            model: 'imagen-3.0-generate-001',
-            prompt: prompt,
-            config: {
-                numberOfImages: 1,
-                aspectRatio: '1:1',
-                outputMimeType: 'image/jpeg'
+        // Use generateContent for gemini-2.5-flash-image
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [{ text: prompt }]
             }
         });
 
-        const imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
-        
-        if (imageBytes) {
-            console.log("✅ Image generated successfully (Raw)");
-            const rawBase64 = `data:image/jpeg;base64,${imageBytes}`;
-            
-            // Compress before returning to ensure it fits in Firestore
-            const compressedBase64 = await compressImage(rawBase64);
-            console.log("✅ Image compressed and ready");
-
-            return {
-                id: Date.now().toString(),
-                type: 'image',
-                url: compressedBase64,
-                name: 'AI_Gen_Image.jpg',
-                size: '800x800'
-            };
+        // The model returns the image in the inlineData of a part
+        if (response.candidates && response.candidates.length > 0) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData && part.inlineData.data) {
+                    console.log("✅ Image generated successfully");
+                    
+                    const mimeType = part.inlineData.mimeType || 'image/png';
+                    const rawBase64 = `data:${mimeType};base64,${part.inlineData.data}`;
+                    
+                    // Compress before returning to ensure it fits in Firestore
+                    const compressedBase64 = await compressImage(rawBase64);
+                    
+                    return {
+                        id: Date.now().toString(),
+                        type: 'image',
+                        url: compressedBase64,
+                        name: 'AI_Gen_Image.jpg',
+                        size: '800x800'
+                    };
+                }
+            }
         }
         
-        console.warn("⚠️ No image data found in response");
+        console.warn("⚠️ No image data found in response parts");
         return null;
     } catch (e) {
         console.error("❌ Image generation failed:", e);
@@ -114,17 +116,24 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
 
         // 2. Polling Loop
         let attempts = 0;
-        const maxAttempts = 60; // 5 minutes max
+        const maxAttempts = 60; // 10 minutes (60 * 10s)
+        let consecutiveErrors = 0;
         
         while (!operation.done && attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10s between checks
             
             try {
+                // Pass operation object as per guidelines
                 operation = await ai.operations.getVideosOperation({
                     operation: operation
                 });
+                consecutiveErrors = 0; // Reset error counter on success
             } catch (pollError) {
-                console.warn("Polling error (retrying):", pollError);
+                console.warn(`Polling error (attempt ${attempts}):`, pollError);
+                consecutiveErrors++;
+                if (consecutiveErrors > 3) {
+                    throw new Error("Repeated polling failures. Aborting video generation.");
+                }
             }
             
             console.log(`Checking video status (${attempts}/${maxAttempts})...`, operation.metadata?.state);
