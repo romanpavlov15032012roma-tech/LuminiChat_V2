@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { Attachment } from "../types";
 
@@ -6,17 +5,18 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const SYSTEM_INSTRUCTION = `Ты — Lumina, продвинутый ИИ-ассистент. 
 Твои возможности:
-1. ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип" или описывает сцену для видео — ты МОЖЕШЬ это сделать. Отвечай: "Начинаю генерацию видео..." и описывай, что именно будет в видео.
+1. ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип", "покажи видео" или описывает сцену для видео — ты МОЖЕШЬ это сделать. Просто ответь текстом, описывающим результат, и система автоматически прикрепит сгенерированное видео.
 2. ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь. Используй это для ответов.
 3. ПОИСК: Ты можешь отвечать на вопросы, используя свои знания.
 4. ЭМОЦИИ: Используй эмодзи, чтобы оживить диалог.
 
-Важно: Никогда не говори, что ты не умеешь создавать видео. Просто подтверди запрос, и система передаст его модели Veo.`;
+Важно: Никогда не говори, что ты не умеешь создавать видео. Просто подтверди запрос (например, "Генерирую видео по вашему запросу..."), и система передаст его модели Veo.`;
 
 async function generateVideo(prompt: string): Promise<Attachment | null> {
     try {
-        console.log("Starting video generation with Veo for prompt:", prompt);
+        console.log("🎬 Starting video generation with Veo for prompt:", prompt);
         
+        // 1. Initiate Generation
         let operation = await ai.models.generateVideos({
             model: 'veo-3.1-fast-generate-preview',
             prompt: prompt,
@@ -27,31 +27,51 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
             }
         });
 
-        console.log("Video operation started:", operation);
+        console.log("⏳ Video operation started:", operation.name);
 
-        // Polling loop with timeout safety
+        // 2. Polling Loop
+        // We iterate for up to ~120 seconds (24 * 5s). Veo Fast is usually 10-20s, but can spike.
         let attempts = 0;
-        while (!operation.done && attempts < 30) { // Max 2.5 mins
+        const maxAttempts = 60; // 5 minutes max
+        
+        while (!operation.done && attempts < maxAttempts) {
             await new Promise(resolve => setTimeout(resolve, 5000));
-            operation = await ai.operations.getVideosOperation({operation: operation});
-            console.log("Checking video status...", operation.metadata?.state);
+            
+            // Critical: Refresh the operation status using its name
+            operation = await ai.operations.getVideosOperation({
+                operation: operation
+            });
+            
+            console.log(`Checking video status (${attempts}/${maxAttempts})...`, operation.metadata?.state);
+            
+            if (operation.error) {
+                throw new Error(`Video generation error: ${operation.error.message}`);
+            }
+            
             attempts++;
         }
 
-        if (!operation.done) throw new Error("Video generation timed out");
+        if (!operation.done && operation.metadata?.state !== 'SUCCEEDED') {
+            throw new Error("Video generation timed out or did not succeed.");
+        }
 
+        // 3. Extract Video URI
         const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
         
         if (videoUri) {
-            // Append key correctly whether the URI already has params or not
+            console.log("✅ Video generated at URI:", videoUri);
+            
+            // Append key correctly for download
             const separator = videoUri.includes('?') ? '&' : '?';
             const fetchUrl = `${videoUri}${separator}key=${process.env.API_KEY}`;
             
+            // 4. Download Video (Proxy via fetch to get Blob)
             const response = await fetch(fetchUrl);
-            if (!response.ok) throw new Error(`Failed to download video: ${response.statusText}`);
+            if (!response.ok) throw new Error(`Failed to download video: ${response.status} ${response.statusText}`);
             
             const blob = await response.blob();
             
+            // 5. Convert to Base64/DataURL for frontend display
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.onloadend = () => {
@@ -69,7 +89,7 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
         }
         return null;
     } catch (e) {
-        console.error("Video generation failed:", e);
+        console.error("❌ Video generation failed:", e);
         return null;
     }
 }
@@ -82,29 +102,33 @@ export const sendMessageToGemini = async (
   try {
     const lowerMsg = message.toLowerCase();
     
-    // Improved detection logic for Russian and English
-    const isVideoRequest = 
-        (lowerMsg.includes('видео') || lowerMsg.includes('video') || lowerMsg.includes('клип')) &&
-        (lowerMsg.includes('сделай') || lowerMsg.includes('создай') || lowerMsg.includes('сгенерируй') || lowerMsg.includes('нарисуй') || lowerMsg.includes('покажи') || lowerMsg.includes('create') || lowerMsg.includes('generate') || lowerMsg.includes('make'));
+    // Improved detection logic for Video requests
+    const videoKeywords = ['видео', 'video', 'клип', 'clip', 'фильм', 'movie', 'анимация'];
+    const actionKeywords = ['сделай', 'создай', 'сгенерируй', 'нарисуй', 'покажи', 'create', 'generate', 'make', 'show'];
     
-    // Check for explicit model name request or "veo"
+    const isVideoRequest = 
+        videoKeywords.some(k => lowerMsg.includes(k)) && 
+        actionKeywords.some(k => lowerMsg.includes(k));
+    
     const explicitRequest = lowerMsg.includes('veo') || lowerMsg.includes('снять видео');
 
-    if (isVideoRequest || explicitRequest) {
-        const videoAttachment = await generateVideo(message || "Abstract video");
+    if ((isVideoRequest || explicitRequest) && message.length > 5) {
+        // VIDEO PATH
+        const videoAttachment = await generateVideo(message || "Abstract visualization");
+        
         if (videoAttachment) {
             return {
-                text: "✨ Видео готово! Сгенерировано с помощью Veo 3.",
+                text: "✨ Видео готово! Я сгенерировала его с помощью модели Veo 3.",
                 attachments: [videoAttachment]
             };
         } else {
             return {
-                text: "Извините, произошла ошибка при генерации видео. Попробуйте изменить запрос.",
+                text: "Извините, генерация видео заняла слишком много времени или произошла ошибка. Попробуйте упростить запрос.",
                 attachments: []
             };
         }
     } else {
-        // Text/Vision Request
+        // TEXT / IMAGE PATH
         const model = 'gemini-2.5-flash';
         
         // Prepare content parts (Text + Images/Files)
@@ -172,7 +196,7 @@ export const sendMessageToGemini = async (
   } catch (error) {
     console.error("Gemini API Error:", error);
     return {
-        text: "Произошла ошибка при связи с ИИ.",
+        text: "Произошла ошибка при связи с ИИ. Попробуйте позже.",
         attachments: []
     };
   }

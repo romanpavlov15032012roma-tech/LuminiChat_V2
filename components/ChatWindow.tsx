@@ -4,7 +4,8 @@ import { Chat, Attachment, Message } from '../types';
 import { User } from '../types';
 import { 
   Send, Paperclip, Smile, MoreVertical, Phone, Video, ArrowLeft, Bot, 
-  X, FileText, Mic, MicOff, VideoOff, PhoneOff, Download, Pencil, Check, CheckCheck, Clock, Play, PlayCircle, Camera
+  X, FileText, Mic, MicOff, VideoOff, PhoneOff, Download, Pencil, Check, CheckCheck, Clock, Play, PlayCircle, Camera,
+  Wand2, Heart, Code, Zap, Eye, Ghost
 } from 'lucide-react';
 import { doc, onSnapshot, updateDoc, collection, addDoc, getDoc, deleteDoc, setDoc, addDoc as firestoreAddDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { db } from '../src/firebase';
@@ -27,6 +28,16 @@ const INPUT_EMOJIS = [
     '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💔', '❣️'
 ];
 
+type MaskType = 'none' | 'matrix' | 'hearts' | 'retro' | 'ghost';
+
+const MASKS: { id: MaskType; name: string; icon: React.ReactNode; color: string }[] = [
+    { id: 'none', name: 'Нет', icon: <VideoOff size={16} />, color: 'bg-slate-500' },
+    { id: 'hearts', name: 'Love', icon: <Heart size={16} />, color: 'bg-pink-500' },
+    { id: 'matrix', name: 'Matrix', icon: <Code size={16} />, color: 'bg-green-500' },
+    { id: 'retro', name: 'Neon', icon: <Zap size={16} />, color: 'bg-violet-500' },
+    { id: 'ghost', name: 'Ghost', icon: <Ghost size={16} />, color: 'bg-cyan-500' },
+];
+
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -45,12 +56,84 @@ const getSupportedMimeType = (type: 'audio' | 'video') => {
     return '';
 };
 
+// --- PARTICLES SYSTEM FOR MASKS ---
+class ParticleSystem {
+    particles: any[] = [];
+    width: number = 0;
+    height: number = 0;
+
+    constructor() {}
+
+    resize(w: number, h: number) {
+        this.width = w;
+        this.height = h;
+    }
+
+    updateHearts(ctx: CanvasRenderingContext2D) {
+        if (Math.random() < 0.1) {
+            this.particles.push({
+                x: Math.random() * this.width,
+                y: this.height + 20,
+                size: Math.random() * 20 + 10,
+                speed: Math.random() * 2 + 1,
+                swing: Math.random() * 2,
+                angle: 0
+            });
+        }
+
+        for (let i = 0; i < this.particles.length; i++) {
+            const p = this.particles[i];
+            p.y -= p.speed;
+            p.angle += 0.05;
+            p.x += Math.sin(p.angle) * p.swing;
+            
+            ctx.font = `${p.size}px serif`;
+            ctx.fillText("❤️", p.x, p.y);
+
+            if (p.y < -50) {
+                this.particles.splice(i, 1);
+                i--;
+            }
+        }
+    }
+
+    updateMatrix(ctx: CanvasRenderingContext2D) {
+        // Initialize columns if empty
+        if (this.particles.length === 0) {
+            const columns = Math.floor(this.width / 20);
+            for (let i = 0; i < columns; i++) {
+                this.particles[i] = Math.random() * this.height; // Store Y pos
+            }
+        }
+
+        ctx.fillStyle = '#0F0';
+        ctx.font = '15px monospace';
+        
+        for (let i = 0; i < this.particles.length; i++) {
+            const text = String.fromCharCode(0x30A0 + Math.random() * 96);
+            const x = i * 20;
+            const y = this.particles[i] * 20;
+            
+            ctx.fillText(text, x, y);
+
+            if (y > this.height && Math.random() > 0.975) {
+                this.particles[i] = 0;
+            }
+            this.particles[i]++;
+        }
+    }
+    
+    clear() {
+        this.particles = [];
+    }
+}
+
 export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentUser, onSendMessage, onEditMessage, onBack, onReaction, onViewProfile }) => {
   const [inputText, setInputText] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<Attachment[]>([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
-  const [activeReactionMessageId, setActiveReactionMessageId] = useState<string | null>(null); // New state for click-triggered reactions
+  const [activeReactionMessageId, setActiveReactionMessageId] = useState<string | null>(null);
   const [playingVideoId, setPlayingVideoId] = useState<string | null>(null);
   
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -61,12 +144,23 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   
+  // -- VIDEO PROCESSING STATE --
+  const [activeMask, setActiveMask] = useState<MaskType>('none');
+  const [showMaskMenu, setShowMaskMenu] = useState(false);
+  
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const peerConnection = useRef<RTCPeerConnection | null>(null);
-  const localStream = useRef<MediaStream | null>(null);
+  const localStream = useRef<MediaStream | null>(null); // Raw Camera Stream
+  const processedStream = useRef<MediaStream | null>(null); // Canvas Stream
   const iceCandidatesQueue = useRef<RTCIceCandidate[]>([]); 
   
+  // Hidden elements for processing
+  const hiddenVideoRef = useRef<HTMLVideoElement>(document.createElement('video'));
+  const canvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
+  const animationFrameRef = useRef<number | null>(null);
+  const particleSystem = useRef<ParticleSystem>(new ParticleSystem());
+
   const [recordMode, setRecordMode] = useState<'audio' | 'video'>('audio');
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -109,12 +203,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
       }
   }, [editingMessageId]);
 
-  // Click outside listener for emoji picker
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (activeReactionMessageId) {
         const target = event.target as HTMLElement;
-        // If click is not inside the reaction menu AND not on the trigger button, close it
         if (!target.closest('.reaction-menu-container') && !target.closest('.reaction-trigger-btn')) {
           setActiveReactionMessageId(null);
         }
@@ -125,10 +217,93 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [activeReactionMessageId]);
 
-  useEffect(() => {
-      if (callStatus !== 'idle' && localVideoRef.current && localStream.current) {
-          localVideoRef.current.srcObject = localStream.current;
+  // --- VIDEO PROCESSING LOOP ---
+  const processVideoFrame = () => {
+      const video = hiddenVideoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      
+      if (video.readyState === video.HAVE_ENOUGH_DATA && ctx) {
+          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              particleSystem.current.resize(canvas.width, canvas.height);
+          }
+
+          // Draw base frame
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          // Apply Masks
+          const mask = activeMask; // Closure capture or ref?
+          
+          if (mask === 'matrix') {
+               // Darken background
+               ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+               ctx.fillRect(0, 0, canvas.width, canvas.height);
+               particleSystem.current.updateMatrix(ctx);
+          } else if (mask === 'hearts') {
+               particleSystem.current.updateHearts(ctx);
+          } else if (mask === 'retro') {
+               // Neon / Sepia overlay
+               const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+               const data = imageData.data;
+               for (let i = 0; i < data.length; i += 4) {
+                   // Simple color shift (Blue/Pink tint)
+                   data[i] = data[i] * 1.2;     // R
+                   data[i + 1] = data[i + 1] * 0.8; // G
+                   data[i + 2] = data[i + 2] * 1.2; // B
+               }
+               ctx.putImageData(imageData, 0, 0);
+               
+               // Scanlines
+               ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
+               for (let y = 0; y < canvas.height; y += 4) {
+                   ctx.fillRect(0, y, canvas.width, 1);
+               }
+               
+               // Vignette
+               const grad = ctx.createRadialGradient(canvas.width/2, canvas.height/2, canvas.height/3, canvas.width/2, canvas.height/2, canvas.height);
+               grad.addColorStop(0, "rgba(0,0,0,0)");
+               grad.addColorStop(1, "rgba(80,0,80,0.5)");
+               ctx.fillStyle = grad;
+               ctx.fillRect(0,0,canvas.width, canvas.height);
+
+          } else if (mask === 'ghost') {
+              // Invert / Ghostly
+               const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+               const data = imageData.data;
+               for (let i = 0; i < data.length; i += 4) {
+                   const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                   data[i] = 255 - avg;     
+                   data[i + 1] = 255 - avg; 
+                   data[i + 2] = 255 - avg + 50; // Blue tint
+               }
+               ctx.putImageData(imageData, 0, 0);
+               ctx.globalAlpha = 0.1;
+               ctx.drawImage(video, Math.random() * 10 - 5, Math.random() * 10 - 5, canvas.width, canvas.height);
+               ctx.globalAlpha = 1.0;
+          }
       }
+      animationFrameRef.current = requestAnimationFrame(processVideoFrame);
+  };
+
+  // Restart loop when mask changes to ensure fresh context/state closure if needed
+  useEffect(() => {
+     if (callStatus !== 'idle') {
+        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+        particleSystem.current.clear();
+        processVideoFrame();
+     }
+  }, [activeMask]);
+
+
+  useEffect(() => {
+      // Connect processed stream to local video preview
+      if (callStatus !== 'idle' && localVideoRef.current && processedStream.current) {
+          localVideoRef.current.srcObject = processedStream.current;
+      }
+      
+      // Handle remote stream
       if (callStatus === 'connected' && remoteVideoRef.current && peerConnection.current) {
           const remoteStream = new MediaStream();
           peerConnection.current.getReceivers().forEach(receiver => {
@@ -185,27 +360,59 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
       return pc;
   };
 
+  const startProcessedStream = async (videoEnabled: boolean) => {
+      // 1. Get Raw Camera
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: videoEnabled ? { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } : false, 
+          audio: true 
+      });
+      localStream.current = stream;
+
+      // 2. Setup Video Processing Pipeline
+      if (videoEnabled) {
+          hiddenVideoRef.current.srcObject = stream;
+          hiddenVideoRef.current.muted = true;
+          hiddenVideoRef.current.play().catch(console.error);
+          
+          // Start Loop
+          processVideoFrame();
+          
+          // Capture Canvas Stream
+          const canvasStream = canvasRef.current.captureStream(30);
+          
+          // Merge Audio from Raw with Video from Canvas
+          const audioTrack = stream.getAudioTracks()[0];
+          if (audioTrack) canvasStream.addTrack(audioTrack);
+          
+          processedStream.current = canvasStream;
+      } else {
+          processedStream.current = stream; // Audio only
+      }
+      return processedStream.current;
+  };
+
   const startCall = async (type: 'audio' | 'video') => {
       setCallType(type);
       setCallStatus('calling');
       setIsVideoEnabled(type === 'video');
       iceCandidatesQueue.current = [];
       try {
-          const stream = await navigator.mediaDevices.getUserMedia({ 
-              video: type === 'video', audio: true 
-          });
-          localStream.current = stream;
+          const finalStream = await startProcessedStream(type === 'video');
+
           if (localVideoRef.current) {
-              localVideoRef.current.srcObject = stream;
+              localVideoRef.current.srcObject = finalStream;
               localVideoRef.current.muted = true;
           }
+
           const pc = await initializePeerConnection();
-          stream.getTracks().forEach(track => pc.addTrack(track, stream));
+          finalStream.getTracks().forEach(track => pc.addTrack(track, finalStream));
+          
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
           await setDoc(doc(db, 'calls', chat.id), {
               type: 'offer', sdp: offer.sdp, callType: type, callerId: currentUser.id
           });
+
           const unsubscribe = onSnapshot(doc(db, 'calls', chat.id), async (snapshot) => {
               const data = snapshot.data();
               if (pc && !pc.currentRemoteDescription && data?.answer) {
@@ -216,6 +423,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                   iceCandidatesQueue.current = [];
               }
           });
+
           onSnapshot(collection(db, 'calls', chat.id, 'candidates'), (snapshot) => {
               snapshot.docChanges().forEach((change) => {
                   if (change.type === 'added') {
@@ -239,23 +447,27 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
           const callData = callDoc.data();
           if (!callData) return;
           setCallStatus('connected');
-          const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: callData.callType === 'video', audio: true 
-          });
-          localStream.current = stream;
+          
+          const isVideoCall = callData.callType === 'video';
+          const finalStream = await startProcessedStream(isVideoCall);
+
           if (localVideoRef.current) {
-              localVideoRef.current.srcObject = stream;
+              localVideoRef.current.srcObject = finalStream;
               localVideoRef.current.muted = true;
           }
+
           const pc = await initializePeerConnection();
-          stream.getTracks().forEach(track => pc.addTrack(track, stream));
+          finalStream.getTracks().forEach(track => pc.addTrack(track, finalStream));
+          
           const offer = new RTCSessionDescription({ type: 'offer', sdp: callData.sdp });
           await pc.setRemoteDescription(offer);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           await updateDoc(doc(db, 'calls', chat.id), { answer: { type: 'answer', sdp: answer.sdp } });
+          
           iceCandidatesQueue.current.forEach(c => pc.addIceCandidate(c).catch(console.error));
           iceCandidatesQueue.current = [];
+          
           onSnapshot(collection(db, 'calls', chat.id, 'candidates'), (snapshot) => {
             snapshot.docChanges().forEach((change) => {
                 if (change.type === 'added') {
@@ -272,9 +484,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
   };
 
   const hangUp = async () => {
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
       if (localStream.current) { localStream.current.getTracks().forEach(track => track.stop()); localStream.current = null; }
+      if (processedStream.current) { processedStream.current.getTracks().forEach(track => track.stop()); processedStream.current = null; }
       if (peerConnection.current) { peerConnection.current.close(); peerConnection.current = null; }
+      
       setCallStatus('idle');
+      setActiveMask('none');
+      setShowMaskMenu(false);
+      
       try { await deleteDoc(doc(db, 'calls', chat.id)); } catch (e) {}
   };
 
@@ -287,8 +505,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
 
   const toggleVideo = () => {
       if (localStream.current) {
+          // We toggle the RAW stream video tracks
           localStream.current.getVideoTracks().forEach(track => track.enabled = !track.enabled);
           setIsVideoEnabled(!isVideoEnabled);
+          
+          // Also handle processing loop
+          if (!isVideoEnabled) {
+              hiddenVideoRef.current.play();
+              processVideoFrame();
+          } else {
+              hiddenVideoRef.current.pause();
+              if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+          }
       }
   };
 
@@ -602,7 +830,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                      </>
                  )}
              </div>
-             {callType === 'video' && <div className="absolute top-4 right-4 w-32 h-48 bg-black rounded-xl overflow-hidden shadow-2xl border border-slate-700 z-20"><video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover mirror-mode" /></div>}
+             
+             {/* LOCAL VIDEO (PIP) with Mask */}
+             {callType === 'video' && (
+                 <div className="absolute top-4 right-4 w-32 h-48 bg-black rounded-xl overflow-hidden shadow-2xl border border-slate-700 z-20">
+                     <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover mirror-mode" />
+                 </div>
+             )}
+
              <div className="relative z-10 flex flex-col items-center flex-1 justify-center w-full max-w-sm mt-20">
                  {callStatus === 'incoming' ? (
                      <div className="text-center animate-bounce">
@@ -622,6 +857,27 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                         <p className="text-slate-300 font-medium mb-8">{callStatus === 'calling' ? 'Звонок...' : callStatus === 'connected' ? 'Разговор' : ''}</p>
                      </div>
                  )}
+                 
+                 {/* Mask Selector (TikTok style) */}
+                 {callStatus === 'connected' && callType === 'video' && showMaskMenu && (
+                     <div className="absolute bottom-32 left-0 right-0 px-4 animate-slide-up">
+                         <div className="flex gap-4 overflow-x-auto pb-4 snap-x justify-center">
+                             {MASKS.map((mask) => (
+                                 <button
+                                    key={mask.id}
+                                    onClick={() => setActiveMask(mask.id)}
+                                    className={`flex flex-col items-center gap-1 min-w-[60px] snap-center transition-all ${activeMask === mask.id ? 'scale-110 opacity-100' : 'opacity-70 hover:opacity-100'}`}
+                                 >
+                                     <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg border-2 ${activeMask === mask.id ? 'border-white' : 'border-transparent'} ${mask.color}`}>
+                                         {mask.icon}
+                                     </div>
+                                     <span className="text-[10px] font-medium text-white shadow-black drop-shadow-md">{mask.name}</span>
+                                 </button>
+                             ))}
+                         </div>
+                     </div>
+                 )}
+
                  <div className="flex items-center gap-6 mt-auto mb-12">
                      {callStatus === 'incoming' ? (
                          <>
@@ -630,6 +886,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                          </>
                      ) : (
                          <>
+                            {callType === 'video' && (
+                                <button 
+                                    onClick={() => setShowMaskMenu(!showMaskMenu)} 
+                                    className={`p-4 rounded-full transition-all ${showMaskMenu ? 'bg-white text-violet-600' : 'bg-slate-800/80 text-white hover:bg-slate-700'}`}
+                                >
+                                    <Wand2 size={24} />
+                                </button>
+                            )}
+                            
                             <button onClick={toggleMute} className={`p-4 rounded-full transition-all ${isMuted ? 'bg-white text-slate-900' : 'bg-slate-800/80 text-white hover:bg-slate-700'}`}>{isMuted ? <MicOff size={24} /> : <Mic size={24} />}</button>
                             <button onClick={hangUp} className="p-5 rounded-full bg-red-500 text-white hover:bg-red-600 shadow-lg shadow-red-500/30 transform hover:scale-110 transition-all"><PhoneOff size={32} /></button>
                             {callType === 'video' && <button onClick={toggleVideo} className={`p-4 rounded-full transition-all ${!isVideoEnabled ? 'bg-white text-slate-900' : 'bg-slate-800/80 text-white hover:bg-slate-700'}`}>{isVideoEnabled ? <Video size={24} /> : <VideoOff size={24} />}</button>}
