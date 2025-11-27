@@ -79,6 +79,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
   
   const recordingPreviewVideoRef = useRef<HTMLVideoElement>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
+  
+  const lastTypingSentRef = useRef<number>(0);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -112,7 +114,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
     const handleClickOutside = (event: MouseEvent) => {
       if (activeReactionMessageId) {
         const target = event.target as HTMLElement;
-        // If click is not inside the reaction menu, close it
+        // If click is not inside the reaction menu AND not on the trigger button, close it
         if (!target.closest('.reaction-menu-container') && !target.closest('.reaction-trigger-btn')) {
           setActiveReactionMessageId(null);
         }
@@ -417,13 +419,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setInputText(e.target.value);
       
-      // Typing indicator logic
-      updateDoc(doc(db, "chats", chat.id), {
-          [`typing.${currentUser.id}`]: serverTimestamp()
-      });
+      // Typing indicator logic - Throttled
+      const now = Date.now();
+      // Only update Firestore if it's been more than 2 seconds since last update to avoid spamming writes
+      if (now - lastTypingSentRef.current > 2000) {
+          lastTypingSentRef.current = now;
+          updateDoc(doc(db, "chats", chat.id), {
+              [`typing.${currentUser.id}`]: serverTimestamp()
+          });
+      }
 
+      // Reset auto-clear timer
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-      
       typingTimeoutRef.current = setTimeout(() => {
           updateDoc(doc(db, "chats", chat.id), {
               [`typing.${currentUser.id}`]: deleteField()

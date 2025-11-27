@@ -301,11 +301,11 @@ const App: React.FC = () => {
 
         if (isAiChat && (text.trim() || attachments.length > 0)) {
             const history = activeMessages.map(m => ({ role: m.senderId === AI_USER.id ? 'model' as const : 'user' as const, parts: [{ text: m.text }] }));
-            if (text) history.push({ role: 'user', parts: [{ text }] });
+            // Note: We don't push the current message text to history here because sendMessageToGemini adds it as the 'current' prompt.
             
             try {
-                // Now returns object with { text, attachments }
-                const aiResponse = await sendMessageToGemini(text, history);
+                // Pass attachments so the AI can "see" images or "read" files
+                const aiResponse = await sendMessageToGemini(text, history, attachments);
                 
                 const aiMessageData = { 
                     senderId: AI_USER.id, 

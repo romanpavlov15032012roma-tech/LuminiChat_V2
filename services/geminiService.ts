@@ -4,19 +4,14 @@ import { Attachment } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-const SYSTEM_INSTRUCTION = `Ты полезный и дружелюбный ассистент в мессенджере Lumina. 
-Ты умеешь:
-1. Отвечать на вопросы кратко и по существу.
-2. Поддерживать диалог, используя контекст.
-3. Генерировать видео с помощью модели Veo 3. Если пользователь пишет "сделай видео", "сгенерируй видео" или описывает сцену для видео, ты должен подтвердить это.
-4. Использовать эмодзи для придания эмоциональной окраски.
-5. Форматировать текст (списки, жирный шрифт).
+const SYSTEM_INSTRUCTION = `Ты — Lumina, продвинутый ИИ-ассистент. 
+Твои возможности:
+1. ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип" или описывает сцену для видео — ты МОЖЕШЬ это сделать. Отвечай: "Начинаю генерацию видео..." и описывай, что именно будет в видео.
+2. ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь. Используй это для ответов.
+3. ПОИСК: Ты можешь отвечать на вопросы, используя свои знания.
+4. ЭМОЦИИ: Используй эмодзи, чтобы оживить диалог.
 
-Твои ограничения:
-- Если запрос касается создания видео, отвечай в духе: "Конечно, начинаю генерацию видео..." (приложение само перехватит этот запрос и отправит его в модель Veo).
-- Не говори, что ты не умеешь генерировать видео. Ты умеешь.
-
-Стиль общения: вежливый, современный, иногда с юмором.`;
+Важно: Никогда не говори, что ты не умеешь создавать видео. Просто подтверди запрос, и система передаст его модели Veo.`;
 
 async function generateVideo(prompt: string): Promise<Attachment | null> {
     try {
@@ -34,23 +29,29 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
 
         console.log("Video operation started:", operation);
 
-        // Polling loop
-        while (!operation.done) {
-            await new Promise(resolve => setTimeout(resolve, 5000)); // Check every 5s
+        // Polling loop with timeout safety
+        let attempts = 0;
+        while (!operation.done && attempts < 30) { // Max 2.5 mins
+            await new Promise(resolve => setTimeout(resolve, 5000));
             operation = await ai.operations.getVideosOperation({operation: operation});
             console.log("Checking video status...", operation.metadata?.state);
+            attempts++;
         }
+
+        if (!operation.done) throw new Error("Video generation timed out");
 
         const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
         
         if (videoUri) {
-            // Fetch the actual video bytes using the URI and API Key
-            const response = await fetch(`${videoUri}&key=${process.env.API_KEY}`);
-            if (!response.ok) throw new Error("Failed to download generated video");
+            // Append key correctly whether the URI already has params or not
+            const separator = videoUri.includes('?') ? '&' : '?';
+            const fetchUrl = `${videoUri}${separator}key=${process.env.API_KEY}`;
+            
+            const response = await fetch(fetchUrl);
+            if (!response.ok) throw new Error(`Failed to download video: ${response.statusText}`);
             
             const blob = await response.blob();
             
-            // Convert to base64/dataURL for storage in our app's attachment format
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.onloadend = () => {
@@ -75,26 +76,22 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
 
 export const sendMessageToGemini = async (
   message: string,
-  history: { role: 'user' | 'model'; parts: { text: string }[] }[]
+  history: { role: 'user' | 'model'; parts: { text: string }[] }[],
+  attachments: Attachment[] = []
 ): Promise<{ text: string, attachments: Attachment[] }> => {
   try {
     const lowerMsg = message.toLowerCase();
     
-    // Improved detection logic
-    const videoKeywords = ['видео', 'video', 'клип', 'ролик'];
-    const actionKeywords = ['сгенерируй', 'создай', 'сделай', 'generate', 'create', 'make', 'покажи'];
+    // Improved detection logic for Russian and English
+    const isVideoRequest = 
+        (lowerMsg.includes('видео') || lowerMsg.includes('video') || lowerMsg.includes('клип')) &&
+        (lowerMsg.includes('сделай') || lowerMsg.includes('создай') || lowerMsg.includes('сгенерируй') || lowerMsg.includes('нарисуй') || lowerMsg.includes('покажи') || lowerMsg.includes('create') || lowerMsg.includes('generate') || lowerMsg.includes('make'));
     
-    const hasVideoKeyword = videoKeywords.some(k => lowerMsg.includes(k));
-    const hasActionKeyword = actionKeywords.some(k => lowerMsg.includes(k));
-    
-    // Check for specific phrases or combination
-    const isVideoRequest = (hasVideoKeyword && hasActionKeyword) || 
-                           lowerMsg.includes('veo') || 
-                           lowerMsg.includes('снять видео');
+    // Check for explicit model name request or "veo"
+    const explicitRequest = lowerMsg.includes('veo') || lowerMsg.includes('снять видео');
 
-    if (isVideoRequest) {
-        // Handle Video Generation
-        const videoAttachment = await generateVideo(message);
+    if (isVideoRequest || explicitRequest) {
+        const videoAttachment = await generateVideo(message || "Abstract video");
         if (videoAttachment) {
             return {
                 text: "✨ Видео готово! Сгенерировано с помощью Veo 3.",
@@ -107,16 +104,58 @@ export const sendMessageToGemini = async (
             };
         }
     } else {
-        // Handle Text Generation
+        // Text/Vision Request
         const model = 'gemini-2.5-flash';
         
+        // Prepare content parts (Text + Images/Files)
+        const currentParts: any[] = [];
+        
+        if (message) {
+            currentParts.push({ text: message });
+        }
+
+        for (const att of attachments) {
+            if (att.type === 'image') {
+                // Remove data:image/xxx;base64, prefix for API
+                const base64Data = att.url.split(',')[1]; 
+                currentParts.push({ 
+                    inlineData: { 
+                        mimeType: 'image/jpeg', 
+                        data: base64Data 
+                    } 
+                });
+            } else if (att.type === 'file' && att.url.startsWith('data:text')) {
+                // For text files, we decode and pass as text
+                try {
+                     const base64Data = att.url.split(',')[1];
+                     const textContent = atob(base64Data);
+                     currentParts.push({ text: `[Attached File: ${att.name}]\n${textContent}` });
+                } catch (e) {
+                    console.warn("Failed to decode text file for AI", e);
+                }
+            } else if (att.type === 'file' && att.url.startsWith('data:application/pdf')) {
+                 const base64Data = att.url.split(',')[1];
+                 currentParts.push({ 
+                    inlineData: { 
+                        mimeType: 'application/pdf', 
+                        data: base64Data 
+                    } 
+                });
+            }
+        }
+        
+        // If we have attachments but no text, ensure we send something
+        if (currentParts.length === 0) {
+            return { text: "Пожалуйста, отправьте текст или файл.", attachments: [] };
+        }
+
         const response = await ai.models.generateContent({
           model: model,
           contents: [
             ...history,
             {
               role: 'user',
-              parts: [{ text: message }]
+              parts: currentParts
             }
           ],
           config: {
