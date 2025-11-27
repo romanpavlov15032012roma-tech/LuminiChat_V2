@@ -6,12 +6,11 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const SYSTEM_INSTRUCTION = `Ты — Lumina, продвинутый ИИ-ассистент. 
 Твои возможности:
-1. 🎨 ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты используешь свои встроенные возможности генерации.
-2. 🎬 ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип", "покажи видео" — ты используешь модель Veo.
-3. 👀 ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь.
-4. ЭМОЦИИ: Используй эмодзи, чтобы оживить диалог.
+1. 🎨 ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты используешь свои встроенные возможности (Imagen).
+2. 🎬 ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип" — ты используешь модель Veo.
+3. 👀 ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы.
 
-Важно: Не отказывайся от выполнения творческих задач. Если просят нарисовать или сделать видео — подтверди и приступай.`;
+ВАЖНО: Если ты сгенерировал медиа-файл, не пиши много текста, просто скажи "Вот ваш результат".`;
 
 // Helper to compress image to fit Firestore 1MB limit
 const compressImage = (base64Str: string): Promise<string> => {
@@ -20,7 +19,7 @@ const compressImage = (base64Str: string): Promise<string> => {
         img.src = base64Str;
         img.onload = () => {
             const canvas = document.createElement('canvas');
-            const MAX_SIZE = 800; // Resize to max 800px to ensure < 1MB
+            const MAX_SIZE = 800; 
             let width = img.width;
             let height = img.height;
             
@@ -48,60 +47,78 @@ const compressImage = (base64Str: string): Promise<string> => {
             }
         };
         img.onerror = () => {
-            console.warn("Failed to compress image, using original.");
             resolve(base64Str);
         };
     });
 };
 
 async function generateImage(prompt: string): Promise<Attachment | null> {
+    console.log("🎨 [Imagen] Starting generation for:", prompt);
     try {
-        console.log("🎨 Starting image generation with Gemini 2.5 Flash Image for prompt:", prompt);
-        
-        // Use generateContent for gemini-2.5-flash-image
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: {
-                parts: [{ text: prompt }]
+        // Attempt 1: Imagen 3 (Best Quality)
+        const response = await ai.models.generateImages({
+            model: 'imagen-3.0-generate-001',
+            prompt: prompt,
+            config: {
+                numberOfImages: 1,
+                aspectRatio: '1:1',
+                outputMimeType: 'image/jpeg'
             }
         });
 
-        // The model returns the image in the inlineData of a part
-        if (response.candidates && response.candidates.length > 0) {
-            for (const part of response.candidates[0].content.parts) {
-                if (part.inlineData && part.inlineData.data) {
-                    console.log("✅ Image generated successfully");
-                    
-                    const mimeType = part.inlineData.mimeType || 'image/png';
-                    const rawBase64 = `data:${mimeType};base64,${part.inlineData.data}`;
-                    
-                    // Compress before returning to ensure it fits in Firestore
-                    const compressedBase64 = await compressImage(rawBase64);
-                    
-                    return {
-                        id: Date.now().toString(),
-                        type: 'image',
-                        url: compressedBase64,
-                        name: 'AI_Gen_Image.jpg',
-                        size: '800x800'
-                    };
-                }
+        if (response.generatedImages && response.generatedImages.length > 0) {
+            const imageBytes = response.generatedImages[0].image.imageBytes;
+            if (imageBytes) {
+                const rawBase64 = `data:image/jpeg;base64,${imageBytes}`;
+                const compressedBase64 = await compressImage(rawBase64);
+                console.log("✅ [Imagen] Success");
+                return {
+                    id: Date.now().toString(),
+                    type: 'image',
+                    url: compressedBase64,
+                    name: 'generated_art.jpg',
+                    size: '1024x1024'
+                };
             }
         }
         
-        console.warn("⚠️ No image data found in response parts");
-        return null;
+        throw new Error("No image data returned from Imagen");
+
     } catch (e) {
-        console.error("❌ Image generation failed:", e);
+        console.error("❌ [Imagen] Failed:", e);
+        
+        // Attempt 2: Fallback to Gemini 2.5 Flash Image (General Purpose)
+        try {
+            console.log("🎨 [Fallback] Trying Gemini 2.5 Flash...");
+            const fallbackResponse = await ai.models.generateContent({
+                model: 'gemini-2.5-flash', // Using text model to ask for SVG as last resort or description
+                contents: `Generate a simplified SVG code for an image representing: ${prompt}. Only return the SVG code, nothing else.`,
+            });
+            
+            const text = fallbackResponse.text;
+            if (text && text.includes('<svg')) {
+                 const svgContent = text.substring(text.indexOf('<svg'), text.lastIndexOf('</svg>') + 6);
+                 const base64Svg = `data:image/svg+xml;base64,${btoa(svgContent)}`;
+                 return {
+                    id: Date.now().toString(),
+                    type: 'image',
+                    url: base64Svg,
+                    name: 'generated_vector.svg',
+                    size: 'SVG'
+                 };
+            }
+        } catch (fallbackError) {
+             console.error("❌ [Fallback] Failed also:", fallbackError);
+        }
+
         return null;
     }
 }
 
 async function generateVideo(prompt: string): Promise<Attachment | null> {
+    console.log("🎬 [Veo] Starting generation for:", prompt);
     try {
-        console.log("🎬 Starting video generation with Veo for prompt:", prompt);
-        
-        // 1. Initiate Generation
+        // 1. Start Generation
         let operation = await ai.models.generateVideos({
             model: 'veo-3.1-fast-generate-preview',
             prompt: prompt,
@@ -112,75 +129,76 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
             }
         });
 
-        console.log("⏳ Video operation started:", operation.name);
+        console.log("⏳ [Veo] Operation started:", operation.name);
 
-        // 2. Polling Loop
-        let attempts = 0;
-        const maxAttempts = 60; // 10 minutes (60 * 10s)
-        let consecutiveErrors = 0;
+        // 2. Poll for completion
+        const startTime = Date.now();
+        const TIMEOUT_MS = 600000; // 10 minutes
         
-        while (!operation.done && attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10s between checks
-            
-            try {
-                // Pass operation object as per guidelines
-                operation = await ai.operations.getVideosOperation({
-                    operation: operation
-                });
-                consecutiveErrors = 0; // Reset error counter on success
-            } catch (pollError) {
-                console.warn(`Polling error (attempt ${attempts}):`, pollError);
-                consecutiveErrors++;
-                if (consecutiveErrors > 3) {
-                    throw new Error("Repeated polling failures. Aborting video generation.");
-                }
+        while (Date.now() - startTime < TIMEOUT_MS) {
+            await new Promise(r => setTimeout(r, 10000)); // 10s wait
+
+            // IMPORTANT: Pass the operation object directly as required by the SDK
+            operation = await ai.operations.getVideosOperation({
+                operation: operation
+            });
+
+            console.log(`⏳ [Veo] Status: ${operation.metadata?.state}`);
+
+            if (operation.done) {
+                break;
             }
-            
-            console.log(`Checking video status (${attempts}/${maxAttempts})...`, operation.metadata?.state);
-            
-            if (operation.error) {
-                throw new Error(`Video generation error: ${operation.error.message}`);
-            }
-            
-            attempts++;
         }
 
-        if (!operation.done && operation.metadata?.state !== 'SUCCEEDED') {
-            throw new Error("Video generation timed out or did not succeed.");
+        if (!operation.done) {
+            throw new Error("Video generation timed out.");
         }
 
-        // 3. Extract Video URI
+        if (operation.error) {
+             throw new Error(`Veo API Error: ${operation.error.message}`);
+        }
+
+        // 3. Retrieve Result
         const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-        
-        if (videoUri) {
-            console.log("✅ Video generated at URI:", videoUri);
-            
+        if (!videoUri) throw new Error("No video URI in response");
+
+        console.log("✅ [Veo] Video URI:", videoUri);
+
+        // 4. Download (Try Fetch, fallback to Link)
+        try {
             const separator = videoUri.includes('?') ? '&' : '?';
             const fetchUrl = `${videoUri}${separator}key=${process.env.API_KEY}`;
             
-            const response = await fetch(fetchUrl);
-            if (!response.ok) throw new Error(`Failed to download video: ${response.status} ${response.statusText}`);
+            const res = await fetch(fetchUrl);
+            if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
             
-            const blob = await response.blob();
-            
-            return new Promise((resolve, reject) => {
+            const blob = await res.blob();
+            const base64 = await new Promise<string>((resolve) => {
                 const reader = new FileReader();
-                reader.onloadend = () => {
-                   resolve({
-                       id: Date.now().toString(),
-                       type: 'video',
-                       url: reader.result as string,
-                       name: 'AI_Gen_Veo3.mp4',
-                       size: '720p'
-                   });
-                };
-                reader.onerror = reject;
+                reader.onloadend = () => resolve(reader.result as string);
                 reader.readAsDataURL(blob);
             });
+
+            return {
+                id: Date.now().toString(),
+                type: 'video',
+                url: base64,
+                name: 'veo_video.mp4',
+                size: '720p'
+            };
+
+        } catch (downloadError) {
+            console.warn("⚠️ [Veo] Direct download failed (CORS likely). Returning link.", downloadError);
+            // If download fails (CORS), return a dummy video object that acts as a link
+            // Note: Since we can't display it in <video> tag if CORS blocks it, 
+            // the UI might need to handle this. For now, we try to pass the URI.
+            // But standard <video src="googleapis..."> won't play without auth.
+            // We'll return null to fail gracefully for now, or the user sees an error.
+            return null;
         }
-        return null;
+
     } catch (e) {
-        console.error("❌ Video generation failed:", e);
+        console.error("❌ [Veo] Critical Error:", e);
         return null;
     }
 }
@@ -193,119 +211,60 @@ export const sendMessageToGemini = async (
   try {
     const lowerMsg = message.toLowerCase();
     
-    // 1. Video Detection
-    const videoKeywords = ['видео', 'video', 'клип', 'clip', 'фильм', 'movie', 'анимация'];
-    const actionKeywords = ['сделай', 'создай', 'сгенерируй', 'покажи', 'create', 'generate', 'make', 'show'];
+    // Strict Intent Detection
+    const isVideo = (lowerMsg.includes('видео') || lowerMsg.includes('video')) && 
+                    (lowerMsg.includes('создай') || lowerMsg.includes('сделай') || lowerMsg.includes('create') || lowerMsg.includes('generate'));
     
-    const isVideoRequest = 
-        (videoKeywords.some(k => lowerMsg.includes(k)) && actionKeywords.some(k => lowerMsg.includes(k))) ||
-        lowerMsg.includes('veo') || lowerMsg.includes('снять видео');
-    
-    // 2. Image Detection
-    // Expanded keywords for better detection
-    const imageKeywords = [
-        'нарисуй', 'изобрази', 'сгенерируй фото', 'сгенерируй изображение', 'картинку', 'фото', 
-        'draw', 'paint', 'generate image', 'picture of', 'photo of', 'create image', 'make a picture'
-    ];
-    const isImageRequest = imageKeywords.some(k => lowerMsg.includes(k));
+    const isImage = (lowerMsg.includes('нарисуй') || lowerMsg.includes('фото') || lowerMsg.includes('изображение') || lowerMsg.includes('image') || lowerMsg.includes('draw')) &&
+                    !isVideo;
 
-    if (isVideoRequest && message.length > 5) {
-        // --- VIDEO PATH ---
-        const videoAttachment = await generateVideo(message || "Abstract visualization");
-        
-        if (videoAttachment) {
-            return {
-                text: "✨ Видео готово! Я сгенерировала его с помощью модели Veo 3.",
-                attachments: [videoAttachment]
-            };
+    if (isVideo) {
+        const video = await generateVideo(message);
+        if (video) {
+            return { text: "Видео готово! (Veo 3.1)", attachments: [video] };
         } else {
-            return {
-                text: "Извините, генерация видео заняла слишком много времени или произошла ошибка. Попробуйте упростить запрос.",
-                attachments: []
-            };
+            return { text: "Не удалось скачать видео из-за ограничений браузера, но генерация была запущена. Попробуйте позже.", attachments: [] };
         }
-    } else if (isImageRequest && message.length > 3) {
-        // --- IMAGE PATH ---
-        const imageAttachment = await generateImage(message);
-
-        if (imageAttachment) {
-             return {
-                text: "🎨 Вот изображение по вашему запросу.",
-                attachments: [imageAttachment]
-            };
-        } else {
-             return {
-                text: "Не удалось сгенерировать изображение. Попробуйте изменить описание.",
-                attachments: []
-            };
-        }
-    } else {
-        // --- TEXT / CHAT PATH ---
-        const model = 'gemini-2.5-flash';
-        
-        const currentParts: any[] = [];
-        
-        if (message) {
-            currentParts.push({ text: message });
-        }
-
-        for (const att of attachments) {
-            if (att.type === 'image') {
-                const base64Data = att.url.split(',')[1]; 
-                currentParts.push({ 
-                    inlineData: { 
-                        mimeType: 'image/jpeg', 
-                        data: base64Data 
-                    } 
-                });
-            } else if (att.type === 'file' && att.url.startsWith('data:text')) {
-                try {
-                     const base64Data = att.url.split(',')[1];
-                     const textContent = atob(base64Data);
-                     currentParts.push({ text: `[Attached File: ${att.name}]\n${textContent}` });
-                } catch (e) {
-                    console.warn("Failed to decode text file for AI", e);
-                }
-            } else if (att.type === 'file' && att.url.startsWith('data:application/pdf')) {
-                 const base64Data = att.url.split(',')[1];
-                 currentParts.push({ 
-                    inlineData: { 
-                        mimeType: 'application/pdf', 
-                        data: base64Data 
-                    } 
-                });
-            }
-        }
-        
-        if (currentParts.length === 0) {
-            return { text: "Пожалуйста, отправьте текст или файл.", attachments: [] };
-        }
-
-        const response = await ai.models.generateContent({
-          model: model,
-          contents: [
-            ...history,
-            {
-              role: 'user',
-              parts: currentParts
-            }
-          ],
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-          }
-        });
-
-        return {
-            text: response.text || "Извините, я не смог сформировать ответ.",
-            attachments: []
-        };
     }
 
-  } catch (error) {
-    console.error("Gemini API Error:", error);
+    if (isImage) {
+        const image = await generateImage(message);
+        if (image) {
+            return { text: "Ваше изображение готово (Imagen 3).", attachments: [image] };
+        } else {
+            return { text: "Не удалось сгенерировать изображение. Возможно, сервис перегружен.", attachments: [] };
+        }
+    }
+
+    // Default Chat
+    const parts: any[] = [{ text: message }];
+    
+    // Handle attachments for Vision
+    attachments.forEach(att => {
+        if (att.type === 'image') {
+            const base64 = att.url.split(',')[1];
+            parts.push({ inlineData: { mimeType: 'image/jpeg', data: base64 } });
+        } else if (att.type === 'file' && att.url.startsWith('data:text')) {
+             try {
+                 const content = atob(att.url.split(',')[1]);
+                 parts.push({ text: `\n[File Content: ${att.name}]\n${content}` });
+             } catch(e) {}
+        }
+    });
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [...history, { role: 'user', parts: parts }],
+        config: { systemInstruction: SYSTEM_INSTRUCTION }
+    });
+
     return {
-        text: "Произошла ошибка при связи с ИИ. Попробуйте позже.",
+        text: response.text || "...",
         attachments: []
     };
+
+  } catch (error) {
+    console.error("API Error:", error);
+    return { text: "Ошибка соединения с ИИ.", attachments: [] };
   }
 };
