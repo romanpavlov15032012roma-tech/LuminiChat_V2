@@ -13,13 +13,14 @@ const SYSTEM_INSTRUCTION = `Ты — Lumina, продвинутый ИИ-асс�
 ВАЖНО: Если ты сгенерировал медиа-файл, не пиши много текста, просто скажи "Вот ваш результат".`;
 
 // Helper to compress image to fit Firestore 1MB limit
+// Updated: Higher quality settings (1024px, 0.85 quality)
 const compressImage = (base64Str: string): Promise<string> => {
     return new Promise((resolve) => {
         const img = new Image();
         img.src = base64Str;
         img.onload = () => {
             const canvas = document.createElement('canvas');
-            const MAX_SIZE = 800; 
+            const MAX_SIZE = 1024; // Increased from 800
             let width = img.width;
             let height = img.height;
             
@@ -40,8 +41,8 @@ const compressImage = (base64Str: string): Promise<string> => {
             const ctx = canvas.getContext('2d');
             if (ctx) {
                 ctx.drawImage(img, 0, 0, width, height);
-                // Compress to JPEG with 0.6 quality
-                resolve(canvas.toDataURL('image/jpeg', 0.6));
+                // Compress to JPEG with 0.85 quality (High Quality)
+                resolve(canvas.toDataURL('image/jpeg', 0.85));
             } else {
                 resolve(base64Str);
             }
@@ -53,12 +54,15 @@ const compressImage = (base64Str: string): Promise<string> => {
 };
 
 async function generateImage(prompt: string): Promise<Attachment | null> {
-    console.log("🎨 [Imagen] Starting generation for:", prompt);
+    // Enhance prompt for better quality
+    const enhancedPrompt = `${prompt}, high resolution, detailed, photorealistic, 8k, cinematic lighting`;
+    console.log("🎨 [Imagen] Starting generation for:", enhancedPrompt);
+    
     try {
         // Attempt 1: Imagen 3 (Best Quality)
         const response = await ai.models.generateImages({
             model: 'imagen-3.0-generate-001',
-            prompt: prompt,
+            prompt: enhancedPrompt,
             config: {
                 numberOfImages: 1,
                 aspectRatio: '1:1',
@@ -70,6 +74,7 @@ async function generateImage(prompt: string): Promise<Attachment | null> {
             const imageBytes = response.generatedImages[0].image.imageBytes;
             if (imageBytes) {
                 const rawBase64 = `data:image/jpeg;base64,${imageBytes}`;
+                // Compress slightly to fit DB but keep high quality
                 const compressedBase64 = await compressImage(rawBase64);
                 console.log("✅ [Imagen] Success");
                 return {
@@ -91,7 +96,7 @@ async function generateImage(prompt: string): Promise<Attachment | null> {
         try {
             console.log("🎨 [Fallback] Trying Gemini 2.5 Flash...");
             const fallbackResponse = await ai.models.generateContent({
-                model: 'gemini-2.5-flash', // Using text model to ask for SVG as last resort or description
+                model: 'gemini-2.5-flash',
                 contents: `Generate a simplified SVG code for an image representing: ${prompt}. Only return the SVG code, nothing else.`,
             });
             
@@ -134,14 +139,23 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
         // 2. Poll for completion
         const startTime = Date.now();
         const TIMEOUT_MS = 600000; // 10 minutes
+        let consecutiveErrors = 0;
         
         while (Date.now() - startTime < TIMEOUT_MS) {
             await new Promise(r => setTimeout(r, 10000)); // 10s wait
 
-            // IMPORTANT: Pass the operation object directly as required by the SDK
-            operation = await ai.operations.getVideosOperation({
-                operation: operation
-            });
+            try {
+                // Pass operation object as required
+                operation = await ai.operations.getVideosOperation({
+                    operation: operation
+                });
+                consecutiveErrors = 0; // Reset on success
+            } catch (pollError) {
+                console.warn("Polling warning:", pollError);
+                consecutiveErrors++;
+                if (consecutiveErrors >= 3) throw new Error("Connection unstable, stopped polling.");
+                continue;
+            }
 
             console.log(`⏳ [Veo] Status: ${operation.metadata?.state}`);
 
@@ -162,13 +176,13 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
         const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
         if (!videoUri) throw new Error("No video URI in response");
 
+        const separator = videoUri.includes('?') ? '&' : '?';
+        const fetchUrl = `${videoUri}${separator}key=${process.env.API_KEY}`;
+
         console.log("✅ [Veo] Video URI:", videoUri);
 
         // 4. Download (Try Fetch, fallback to Link)
         try {
-            const separator = videoUri.includes('?') ? '&' : '?';
-            const fetchUrl = `${videoUri}${separator}key=${process.env.API_KEY}`;
-            
             const res = await fetch(fetchUrl);
             if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
             
@@ -189,12 +203,15 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
 
         } catch (downloadError) {
             console.warn("⚠️ [Veo] Direct download failed (CORS likely). Returning link.", downloadError);
-            // If download fails (CORS), return a dummy video object that acts as a link
-            // Note: Since we can't display it in <video> tag if CORS blocks it, 
-            // the UI might need to handle this. For now, we try to pass the URI.
-            // But standard <video src="googleapis..."> won't play without auth.
-            // We'll return null to fail gracefully for now, or the user sees an error.
-            return null;
+            
+            // Return special attachment that ChatWindow will render as a link button
+            return {
+                id: Date.now().toString(),
+                type: 'video', // keep type video
+                url: fetchUrl, // External URL
+                name: 'veo_link_video.mp4',
+                size: 'External Link'
+            };
         }
 
     } catch (e) {
@@ -221,7 +238,12 @@ export const sendMessageToGemini = async (
     if (isVideo) {
         const video = await generateVideo(message);
         if (video) {
-            return { text: "Видео готово! (Veo 3.1)", attachments: [video] };
+            // Check if it's a link (fallback) or a blob
+            const isLink = video.url.startsWith('http');
+            const msgText = isLink 
+                ? "Видео сгенерировано! К сожалению, из-за настроек безопасности браузера его нельзя показать прямо здесь, но вы можете открыть его по ссылке." 
+                : "Видео готово! (Veo 3.1)";
+            return { text: msgText, attachments: [video] };
         } else {
             return { text: "Не удалось скачать видео из-за ограничений браузера, но генерация была запущена. Попробуйте позже.", attachments: [] };
         }
@@ -230,7 +252,7 @@ export const sendMessageToGemini = async (
     if (isImage) {
         const image = await generateImage(message);
         if (image) {
-            return { text: "Ваше изображение готово (Imagen 3).", attachments: [image] };
+            return { text: "Ваше изображение готово (Imagen 3 High Quality).", attachments: [image] };
         } else {
             return { text: "Не удалось сгенерировать изображение. Возможно, сервис перегружен.", attachments: [] };
         }

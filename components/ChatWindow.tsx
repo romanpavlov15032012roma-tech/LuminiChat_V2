@@ -5,7 +5,7 @@ import { User } from '../types';
 import { 
   Send, Paperclip, Smile, MoreVertical, Phone, Video, ArrowLeft, Bot, 
   X, FileText, Mic, MicOff, VideoOff, PhoneOff, Download, Pencil, Check, CheckCheck, Clock, Play, PlayCircle, Camera,
-  Wand2, Heart, Code, Zap, Eye, Ghost, Droplets, Grid3X3, Film, Sword, Skull, Flame, Cat
+  Wand2, Heart, Code, Zap, Eye, Ghost, Droplets, Grid3X3, Film, Sword, Skull, Flame, Cat, ExternalLink
 } from 'lucide-react';
 import { doc, onSnapshot, updateDoc, collection, addDoc, getDoc, deleteDoc, setDoc, addDoc as firestoreAddDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { db } from '../src/firebase';
@@ -188,6 +188,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLTextAreaElement>(null);
   
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+
   const isGroup = chat.isGroup;
   const participant = chat.participants[0]; 
   const displayAvatar = isGroup ? chat.groupAvatar : participant?.avatar;
@@ -913,16 +915,39 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                                 {msg.attachments.map((att, i) => (
                                     <div key={i} className="rounded-lg overflow-hidden">
                                         {att.type === 'image' && (
-                                            <img src={att.url} alt="attachment" className="max-w-full h-auto rounded-lg max-h-60 object-cover cursor-pointer hover:opacity-95" onClick={() => window.open(att.url, '_blank')} />
+                                            <img 
+                                                src={att.url} 
+                                                alt="attachment" 
+                                                className="max-w-full h-auto rounded-lg max-h-60 object-cover cursor-pointer hover:opacity-95 transition-opacity" 
+                                                onClick={() => setLightboxImage(att.url)} 
+                                            />
                                         )}
                                         {att.type === 'video' && (
-                                            <div className="relative bg-black rounded-lg overflow-hidden">
-                                                <video 
-                                                    src={att.url} 
-                                                    controls 
-                                                    className="max-w-full max-h-60 w-full"
-                                                />
-                                            </div>
+                                            att.url.startsWith('http') ? (
+                                                <div className="p-3 bg-black/20 dark:bg-black/40 rounded-lg flex flex-col gap-2">
+                                                    <div className="flex items-center gap-2 text-sm font-medium">
+                                                        <Video size={16} />
+                                                        <span>Сгенерированное видео</span>
+                                                    </div>
+                                                    <a 
+                                                        href={att.url} 
+                                                        target="_blank" 
+                                                        rel="noopener noreferrer"
+                                                        className="flex items-center justify-center gap-2 w-full py-2 bg-white text-violet-600 rounded-lg font-bold text-sm hover:bg-slate-100 transition-colors"
+                                                    >
+                                                        <ExternalLink size={16} />
+                                                        Смотреть видео (Veo)
+                                                    </a>
+                                                </div>
+                                            ) : (
+                                                <div className="relative bg-black rounded-lg overflow-hidden">
+                                                    <video 
+                                                        src={att.url} 
+                                                        controls 
+                                                        className="max-w-full max-h-60 w-full"
+                                                    />
+                                                </div>
+                                            )
                                         )}
                                         {att.type === 'audio' && (
                                             <div className="flex items-center gap-2 bg-black/10 dark:bg-white/10 p-2 rounded-lg min-w-[200px]">
@@ -1317,6 +1342,27 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                       )}
                   </div>
               )}
+          </div>
+      )}
+
+      {/* Lightbox Modal */}
+      {lightboxImage && (
+          <div 
+              className="fixed inset-0 z-[70] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4 animate-fade-in"
+              onClick={() => setLightboxImage(null)}
+          >
+              <button 
+                  className="absolute top-4 right-4 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
+                  onClick={() => setLightboxImage(null)}
+              >
+                  <X size={24} />
+              </button>
+              <img 
+                  src={lightboxImage} 
+                  alt="Full view" 
+                  className="max-w-full max-h-screen object-contain rounded-lg shadow-2xl"
+                  onClick={(e) => e.stopPropagation()} 
+              />
           </div>
       )}
     </div>
