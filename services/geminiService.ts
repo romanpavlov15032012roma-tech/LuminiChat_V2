@@ -5,7 +5,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const SYSTEM_INSTRUCTION = `Ты — Lumina, продвинутый ИИ-ассистент. 
 Твои возможности:
-1. 🎨 ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты используешь модель Gemini Flash Image.
+1. 🎨 ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты используешь модель Imagen 3.
 2. 🎬 ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип", "покажи видео" — ты используешь модель Veo.
 3. 👀 ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь.
 4. ЭМОЦИИ: Используй эмодзи, чтобы оживить диалог.
@@ -55,36 +55,36 @@ const compressImage = (base64Str: string): Promise<string> => {
 
 async function generateImage(prompt: string): Promise<Attachment | null> {
     try {
-        console.log("🎨 Starting image generation with Gemini Flash Image for prompt:", prompt);
+        console.log("🎨 Starting image generation with Imagen 3 for prompt:", prompt);
         
-        // Enhance prompt to ensure generation intent is clear
-        const enhancedPrompt = `Generate a high-quality image of: ${prompt}`;
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: {
-                parts: [{ text: enhancedPrompt }]
+        // Use the dedicated generateImages method for Imagen models
+        const response = await ai.models.generateImages({
+            model: 'imagen-3.0-generate-001',
+            prompt: prompt,
+            config: {
+                numberOfImages: 1,
+                aspectRatio: '1:1',
+                outputMimeType: 'image/jpeg'
             }
         });
 
-        const parts = response.candidates?.[0]?.content?.parts || [];
-        for (const part of parts) {
-            if (part.inlineData) {
-                console.log("✅ Image generated successfully (Raw)");
-                const rawBase64 = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-                
-                // Compress before returning
-                const compressedBase64 = await compressImage(rawBase64);
-                console.log("✅ Image compressed and ready");
+        const imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
+        
+        if (imageBytes) {
+            console.log("✅ Image generated successfully (Raw)");
+            const rawBase64 = `data:image/jpeg;base64,${imageBytes}`;
+            
+            // Compress before returning to ensure it fits in Firestore
+            const compressedBase64 = await compressImage(rawBase64);
+            console.log("✅ Image compressed and ready");
 
-                return {
-                    id: Date.now().toString(),
-                    type: 'image',
-                    url: compressedBase64,
-                    name: 'AI_Gen_Image.jpg',
-                    size: '800x800'
-                };
-            }
+            return {
+                id: Date.now().toString(),
+                type: 'image',
+                url: compressedBase64,
+                name: 'AI_Gen_Image.jpg',
+                size: '800x800'
+            };
         }
         
         console.warn("⚠️ No image data found in response");
