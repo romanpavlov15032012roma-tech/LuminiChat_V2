@@ -5,12 +5,45 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const SYSTEM_INSTRUCTION = `Ты — Lumina, продвинутый ИИ-ассистент. 
 Твои возможности:
-1. ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип", "покажи видео" или описывает сцену для видео — ты МОЖЕШЬ это сделать. Просто ответь текстом, описывающим результат, и система автоматически прикрепит сгенерированное видео.
-2. ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь. Используй это для ответов.
-3. ПОИСК: Ты можешь отвечать на вопросы, используя свои знания.
+1. ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип", "покажи видео" — ты МОЖЕШЬ это сделать. Просто ответь текстом, описывающим результат.
+2. ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты МОЖЕШЬ это сделать.
+3. ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь.
 4. ЭМОЦИИ: Используй эмодзи, чтобы оживить диалог.
 
-Важно: Никогда не говори, что ты не умеешь создавать видео. Просто подтверди запрос (например, "Генерирую видео по вашему запросу..."), и система передаст его модели Veo.`;
+Важно: Никогда не говори, что ты не умеешь создавать видео или рисовать. Просто подтверди запрос (например, "Рисую..." или "Создаю видео..."), и система все сделает.`;
+
+async function generateImage(prompt: string): Promise<Attachment | null> {
+    try {
+        console.log("🎨 Starting image generation with Imagen for prompt:", prompt);
+        
+        const response = await ai.models.generateImages({
+            model: 'imagen-3.0-generate-001',
+            prompt: prompt,
+            config: {
+                numberOfImages: 1,
+                aspectRatio: '1:1',
+                outputMimeType: 'image/jpeg'
+            }
+        });
+
+        const imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
+
+        if (imageBytes) {
+            console.log("✅ Image generated successfully");
+            return {
+                id: Date.now().toString(),
+                type: 'image',
+                url: `data:image/jpeg;base64,${imageBytes}`,
+                name: 'AI_Gen_Imagen.jpg',
+                size: '1024x1024'
+            };
+        }
+        return null;
+    } catch (e) {
+        console.error("❌ Image generation failed:", e);
+        return null;
+    }
+}
 
 async function generateVideo(prompt: string): Promise<Attachment | null> {
     try {
@@ -30,14 +63,12 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
         console.log("⏳ Video operation started:", operation.name);
 
         // 2. Polling Loop
-        // We iterate for up to ~120 seconds (24 * 5s). Veo Fast is usually 10-20s, but can spike.
         let attempts = 0;
         const maxAttempts = 60; // 5 minutes max
         
         while (!operation.done && attempts < maxAttempts) {
             await new Promise(resolve => setTimeout(resolve, 5000));
             
-            // Critical: Refresh the operation status using its name
             operation = await ai.operations.getVideosOperation({
                 operation: operation
             });
@@ -61,17 +92,14 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
         if (videoUri) {
             console.log("✅ Video generated at URI:", videoUri);
             
-            // Append key correctly for download
             const separator = videoUri.includes('?') ? '&' : '?';
             const fetchUrl = `${videoUri}${separator}key=${process.env.API_KEY}`;
             
-            // 4. Download Video (Proxy via fetch to get Blob)
             const response = await fetch(fetchUrl);
             if (!response.ok) throw new Error(`Failed to download video: ${response.status} ${response.statusText}`);
             
             const blob = await response.blob();
             
-            // 5. Convert to Base64/DataURL for frontend display
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.onloadend = () => {
@@ -102,18 +130,20 @@ export const sendMessageToGemini = async (
   try {
     const lowerMsg = message.toLowerCase();
     
-    // Improved detection logic for Video requests
+    // 1. Video Detection
     const videoKeywords = ['видео', 'video', 'клип', 'clip', 'фильм', 'movie', 'анимация'];
-    const actionKeywords = ['сделай', 'создай', 'сгенерируй', 'нарисуй', 'покажи', 'create', 'generate', 'make', 'show'];
+    const actionKeywords = ['сделай', 'создай', 'сгенерируй', 'покажи', 'create', 'generate', 'make', 'show'];
     
     const isVideoRequest = 
-        videoKeywords.some(k => lowerMsg.includes(k)) && 
-        actionKeywords.some(k => lowerMsg.includes(k));
+        (videoKeywords.some(k => lowerMsg.includes(k)) && actionKeywords.some(k => lowerMsg.includes(k))) ||
+        lowerMsg.includes('veo') || lowerMsg.includes('снять видео');
     
-    const explicitRequest = lowerMsg.includes('veo') || lowerMsg.includes('снять видео');
+    // 2. Image Detection
+    const imageKeywords = ['нарисуй', 'изобрази', 'сгенерируй фото', 'сгенерируй изображение', 'картинку', 'draw', 'paint', 'generate image', 'picture of', 'photo of'];
+    const isImageRequest = imageKeywords.some(k => lowerMsg.includes(k));
 
-    if ((isVideoRequest || explicitRequest) && message.length > 5) {
-        // VIDEO PATH
+    if (isVideoRequest && message.length > 5) {
+        // --- VIDEO PATH ---
         const videoAttachment = await generateVideo(message || "Abstract visualization");
         
         if (videoAttachment) {
@@ -127,11 +157,25 @@ export const sendMessageToGemini = async (
                 attachments: []
             };
         }
+    } else if (isImageRequest && message.length > 3) {
+        // --- IMAGE PATH ---
+        const imageAttachment = await generateImage(message);
+
+        if (imageAttachment) {
+             return {
+                text: "🎨 Вот изображение по вашему запросу (Imagen 3).",
+                attachments: [imageAttachment]
+            };
+        } else {
+             return {
+                text: "Не удалось сгенерировать изображение. Попробуйте изменить описание.",
+                attachments: []
+            };
+        }
     } else {
-        // TEXT / IMAGE PATH
+        // --- TEXT / CHAT PATH ---
         const model = 'gemini-2.5-flash';
         
-        // Prepare content parts (Text + Images/Files)
         const currentParts: any[] = [];
         
         if (message) {
@@ -140,7 +184,6 @@ export const sendMessageToGemini = async (
 
         for (const att of attachments) {
             if (att.type === 'image') {
-                // Remove data:image/xxx;base64, prefix for API
                 const base64Data = att.url.split(',')[1]; 
                 currentParts.push({ 
                     inlineData: { 
@@ -149,7 +192,6 @@ export const sendMessageToGemini = async (
                     } 
                 });
             } else if (att.type === 'file' && att.url.startsWith('data:text')) {
-                // For text files, we decode and pass as text
                 try {
                      const base64Data = att.url.split(',')[1];
                      const textContent = atob(base64Data);
@@ -168,7 +210,6 @@ export const sendMessageToGemini = async (
             }
         }
         
-        // If we have attachments but no text, ensure we send something
         if (currentParts.length === 0) {
             return { text: "Пожалуйста, отправьте текст или файл.", attachments: [] };
         }
