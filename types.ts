@@ -1,3 +1,4 @@
+
 export interface User {
   id: string;
   name: string;
@@ -44,4 +45,8 @@ export interface Chat {
   lastMessage?: Message;
   isTyping?: boolean;
   updatedAt?: any;
+  isGroup?: boolean;
+  groupName?: string;
+  groupAvatar?: string;
+  groupAdminId?: string;
 }

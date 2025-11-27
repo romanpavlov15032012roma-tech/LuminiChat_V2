@@ -1,6 +1,6 @@
 import React from 'react';
 import { Chat, User } from '../types';
-import { Search, Menu, PenSquare, Settings, UserPlus, Phone, Hash, Mic, Gamepad2, Trash2 } from 'lucide-react';
+import { Search, Menu, PenSquare, Settings, UserPlus, Phone, Hash, Mic, Gamepad2, Trash2, Users, Plus } from 'lucide-react';
 
 interface SidebarProps {
   chats: Chat[];
@@ -15,6 +15,7 @@ interface SidebarProps {
   onStartChat: (user: User) => void;
   onOpenGame: () => void;
   onDeleteChat: (chatId: string) => void;
+  onCreateGroup: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -29,13 +30,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   otherUsers,
   onStartChat,
   onOpenGame,
-  onDeleteChat
+  onDeleteChat,
+  onCreateGroup
 }) => {
   
   const formatTime = (date: Date | any | undefined) => {
     if (!date) return '';
     try {
-      // Handle Firestore Timestamp or Date or String
       const d = date.toDate ? date.toDate() : new Date(date);
       if (isNaN(d.getTime())) return '';
       return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -49,19 +50,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
           return <span className="text-violet-500 dark:text-violet-400 animate-pulse">Печатает...</span>;
       }
       if (!chat.lastMessage) {
-          return <span className="italic opacity-50">Начните общение</span>;
+          return <span className="italic opacity-50">{chat.isGroup ? 'Группа создана' : 'Начните общение'}</span>;
       }
       const msg = chat.lastMessage;
+      
+      let senderPrefix = '';
+      if (chat.isGroup && msg.senderId !== currentUser.id) {
+          const sender = chat.participants.find(p => p.id === msg.senderId);
+          if (sender) senderPrefix = `${sender.name.split(' ')[0]}: `;
+      }
+
       if (msg.attachments && msg.attachments.length > 0) {
           const lastAtt = msg.attachments[0];
-          if (lastAtt.type === 'audio') {
-              return <span className="flex items-center gap-1"><Mic size={12} /> Голосовое</span>;
-          }
-          if (lastAtt.type === 'image') return '📷 Фото';
-          if (lastAtt.type === 'video') return '🎥 Видео';
-          return '📎 Файл';
+          let content = '📎 Файл';
+          if (lastAtt.type === 'audio') content = 'Голосовое';
+          if (lastAtt.type === 'image') content = '📷 Фото';
+          if (lastAtt.type === 'video') content = '🎥 Видео';
+          
+          return (
+              <span className="flex items-center gap-1">
+                  {senderPrefix}
+                  {lastAtt.type === 'audio' && <Mic size={12} />} 
+                  {content}
+              </span>
+          );
       }
-      return msg.text;
+      return <span className="truncate">{senderPrefix}{msg.text}</span>;
   };
 
   return (
@@ -95,15 +109,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
            </div>
         </div>
         
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
             <button 
                 onClick={onOpenGame}
-                className="p-2 text-violet-500 hover:text-violet-600 bg-violet-50 dark:bg-violet-900/20 hover:bg-violet-100 dark:hover:bg-violet-900/40 transition-colors rounded-full" 
+                className="p-2 text-slate-400 hover:text-violet-500 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors rounded-full" 
             >
                <Gamepad2 size={20} />
             </button>
-            <button className="p-2 text-slate-400 dark:text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors rounded-full hover:bg-slate-100 dark:hover:bg-slate-800">
-               <PenSquare size={20} />
+            <button 
+                onClick={onCreateGroup}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-900/50 rounded-full transition-colors text-sm font-medium"
+                title="Создать группу"
+            >
+               <Users size={16} />
+               <span className="hidden xl:inline">Группа</span>
+               <Plus size={14} className="xl:hidden" />
             </button>
         </div>
       </div>
@@ -113,7 +133,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="relative group">
           <input 
             type="text" 
-            placeholder="Поиск людей (имя, телефон)..." 
+            placeholder="Поиск..." 
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             className="w-full bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-200 placeholder-slate-500 dark:placeholder-slate-500 rounded-xl py-2 pl-10 pr-4 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all border border-slate-200 dark:border-slate-700/50"
@@ -126,7 +146,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex-1 overflow-y-auto px-2 space-y-1">
         {chats.length > 0 && (
           chats.map((chat) => {
-            const participant = chat.participants[0];
+            let displayName = 'Chat';
+            let displayAvatar = '';
+            let isOnline = false;
+
+            if (chat.isGroup) {
+                displayName = chat.groupName || 'Группа';
+                displayAvatar = chat.groupAvatar || '';
+            } else {
+                const participant = chat.participants[0];
+                displayName = participant?.name || 'Пользователь';
+                displayAvatar = participant?.avatar || '';
+                isOnline = participant?.isOnline || false;
+            }
+
             const isSelected = selectedChatId === chat.id;
             
             return (
@@ -141,11 +174,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <div className="relative flex-shrink-0">
                   <img 
-                    src={participant.avatar || 'https://via.placeholder.com/150'} 
-                    alt={participant.name} 
+                    src={displayAvatar || 'https://via.placeholder.com/150'} 
+                    alt={displayName} 
                     className={`w-12 h-12 rounded-full object-cover border-2 ${isSelected ? 'border-violet-500' : 'border-slate-200 dark:border-slate-700'}`}
                   />
-                  {participant.isOnline && (
+                  {!chat.isGroup && isOnline && (
                     <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white dark:border-slate-900 rounded-full z-10"></span>
                   )}
                 </div>
@@ -153,7 +186,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-baseline mb-0.5">
                     <h3 className={`text-sm font-semibold truncate ${isSelected ? 'text-violet-900 dark:text-violet-100' : 'text-slate-700 dark:text-slate-200'}`}>
-                      {participant.name}
+                      {displayName}
                     </h3>
                     {chat.lastMessage && (
                       <span className={`text-xs flex-shrink-0 ml-2 ${isSelected ? 'text-violet-700 dark:text-violet-300' : 'text-slate-500'}`}>
@@ -165,7 +198,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <p className={`text-sm truncate mr-2 ${isSelected ? 'text-violet-700 dark:text-violet-200/70' : 'text-slate-500 dark:text-slate-400'} ${chat.unreadCount > 0 ? 'font-medium text-slate-900 dark:text-white' : ''}`}>
                       {getPreviewText(chat)}
                     </p>
-                    {/* Unread Badge */}
                     {chat.unreadCount > 0 && (
                         <div className="bg-violet-600 text-white text-[10px] font-bold h-5 min-w-[1.25rem] px-1 flex items-center justify-center rounded-full shadow-sm animate-fade-in">
                             {chat.unreadCount > 99 ? '99+' : chat.unreadCount}
@@ -174,7 +206,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                 </div>
 
-                {/* Delete Button (Visible on Hover) */}
                 <button
                     onClick={(e) => {
                         e.stopPropagation();
@@ -190,7 +221,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })
         )}
 
-        {/* Global Search Results */}
         {otherUsers.length > 0 && (
           <>
             <div className="px-3 pt-4 pb-2 text-xs font-semibold text-slate-500 dark:text-slate-500 uppercase tracking-wider flex items-center gap-2">

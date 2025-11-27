@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
@@ -292,7 +293,10 @@ const App: React.FC = () => {
                   messages: [], 
                   unreadCount: 0,
                   lastMessage: lastMsg,
-                  updatedAt: chatData.updatedAt?.toDate()
+                  updatedAt: chatData.updatedAt?.toDate(),
+                  isGroup: chatData.isGroup,
+                  groupName: chatData.groupName,
+                  groupAvatar: chatData.groupAvatar
               } as Chat;
           });
 
@@ -435,6 +439,35 @@ const App: React.FC = () => {
           handleSelectChat(docRef.id);
       } catch (e: any) {
           if (e.code === 'permission-denied') setPermissionError(true);
+      }
+  };
+
+  const handleCreateGroup = async () => {
+      const groupName = window.prompt("Введите название группы:");
+      if (!groupName || !currentUser) return;
+
+      const newChatData = {
+          participantIds: [currentUser.id],
+          isGroup: true,
+          groupName: groupName,
+          groupAvatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(groupName)}&background=random`,
+          groupAdminId: currentUser.id,
+          updatedAt: Timestamp.now(),
+          lastMessage: {
+              id: 'system_create',
+              senderId: 'system',
+              text: `Группа "${groupName}" создана`,
+              timestamp: Timestamp.now(),
+              status: 'read'
+          }
+      };
+
+      try {
+          const docRef = await addDoc(collection(db, "chats"), newChatData);
+          handleSelectChat(docRef.id);
+      } catch (e: any) {
+           console.error("Error creating group", e);
+           if (e.code === 'permission-denied') setPermissionError(true);
       }
   };
 
@@ -591,6 +624,7 @@ const App: React.FC = () => {
           onStartChat={handleStartChat}
           onOpenGame={() => setIsGameOpen(true)}
           onDeleteChat={handleDeleteChat}
+          onCreateGroup={handleCreateGroup}
         />
       </div>
 
