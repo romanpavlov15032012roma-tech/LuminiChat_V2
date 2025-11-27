@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
@@ -324,9 +323,19 @@ const App: React.FC = () => {
                     lastMessage: { ...aiMessageData, attachments: aiPreviewAttachments }, 
                     updatedAt: Timestamp.now() 
                 });
-            } catch (e) { console.error("AI Error", e); }
+            } catch (e) { 
+                console.error("AI Error", e); 
+                // Alert for common AI generation errors if useful
+            }
         }
-    } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); }
+    } catch (e: any) { 
+        console.error("Send message error:", e);
+        if (e.code === 'permission-denied') setPermissionError(true);
+        // Alert if message size is too big (likely due to base64 image/video)
+        if (e.code === 'invalid-argument' && e.message.includes('exceeds the maximum allowed size')) {
+            alert("Файл слишком большой для отправки. Попробуйте сжать изображение.");
+        }
+    }
   };
 
   const handleEditMessage = async (messageId: string, newText: string) => { if (!selectedChatId) return; try { const msgRef = doc(db, "chats", selectedChatId, "messages", messageId); await updateDoc(msgRef, { text: newText, isEdited: true }); } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); } };

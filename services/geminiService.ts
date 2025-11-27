@@ -5,39 +5,89 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const SYSTEM_INSTRUCTION = `Ты — Lumina, продвинутый ИИ-ассистент. 
 Твои возможности:
-1. ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип", "покажи видео" — ты МОЖЕШЬ это сделать. Просто ответь текстом, описывающим результат.
-2. ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты МОЖЕШЬ это сделать.
-3. ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь.
+1. 🎨 ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Если пользователь просит "нарисуй", "сгенерируй картинку", "сделай фото" — ты используешь модель Gemini Flash Image.
+2. 🎬 ГЕНЕРАЦИЯ ВИДЕО: Если пользователь просит "сделай видео", "сгенерируй клип", "покажи видео" — ты используешь модель Veo.
+3. 👀 ЗРЕНИЕ: Ты видишь изображения и можешь читать текстовые файлы, которые прикрепляет пользователь.
 4. ЭМОЦИИ: Используй эмодзи, чтобы оживить диалог.
 
-Важно: Никогда не говори, что ты не умеешь создавать видео или рисовать. Просто подтверди запрос (например, "Рисую..." или "Создаю видео..."), и система все сделает.`;
+Важно: Не отказывайся от выполнения творческих задач. Если просят нарисовать или сделать видео — подтверди и приступай.`;
+
+// Helper to compress image to fit Firestore 1MB limit
+const compressImage = (base64Str: string): Promise<string> => {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.src = base64Str;
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const MAX_SIZE = 800; // Resize to max 800px to ensure < 1MB
+            let width = img.width;
+            let height = img.height;
+            
+            if (width > height) {
+                if (width > MAX_SIZE) {
+                    height *= MAX_SIZE / width;
+                    width = MAX_SIZE;
+                }
+            } else {
+                if (height > MAX_SIZE) {
+                    width *= MAX_SIZE / height;
+                    height = MAX_SIZE;
+                }
+            }
+            
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.drawImage(img, 0, 0, width, height);
+                // Compress to JPEG with 0.6 quality
+                resolve(canvas.toDataURL('image/jpeg', 0.6));
+            } else {
+                resolve(base64Str);
+            }
+        };
+        img.onerror = () => {
+            console.warn("Failed to compress image, using original.");
+            resolve(base64Str);
+        };
+    });
+};
 
 async function generateImage(prompt: string): Promise<Attachment | null> {
     try {
-        console.log("🎨 Starting image generation with Imagen for prompt:", prompt);
+        console.log("🎨 Starting image generation with Gemini Flash Image for prompt:", prompt);
         
-        const response = await ai.models.generateImages({
-            model: 'imagen-3.0-generate-001',
-            prompt: prompt,
-            config: {
-                numberOfImages: 1,
-                aspectRatio: '1:1',
-                outputMimeType: 'image/jpeg'
+        // Enhance prompt to ensure generation intent is clear
+        const enhancedPrompt = `Generate a high-quality image of: ${prompt}`;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [{ text: enhancedPrompt }]
             }
         });
 
-        const imageBytes = response.generatedImages?.[0]?.image?.imageBytes;
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+            if (part.inlineData) {
+                console.log("✅ Image generated successfully (Raw)");
+                const rawBase64 = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                
+                // Compress before returning
+                const compressedBase64 = await compressImage(rawBase64);
+                console.log("✅ Image compressed and ready");
 
-        if (imageBytes) {
-            console.log("✅ Image generated successfully");
-            return {
-                id: Date.now().toString(),
-                type: 'image',
-                url: `data:image/jpeg;base64,${imageBytes}`,
-                name: 'AI_Gen_Imagen.jpg',
-                size: '1024x1024'
-            };
+                return {
+                    id: Date.now().toString(),
+                    type: 'image',
+                    url: compressedBase64,
+                    name: 'AI_Gen_Image.jpg',
+                    size: '800x800'
+                };
+            }
         }
+        
+        console.warn("⚠️ No image data found in response");
         return null;
     } catch (e) {
         console.error("❌ Image generation failed:", e);
@@ -69,9 +119,13 @@ async function generateVideo(prompt: string): Promise<Attachment | null> {
         while (!operation.done && attempts < maxAttempts) {
             await new Promise(resolve => setTimeout(resolve, 5000));
             
-            operation = await ai.operations.getVideosOperation({
-                operation: operation
-            });
+            try {
+                operation = await ai.operations.getVideosOperation({
+                    operation: operation
+                });
+            } catch (pollError) {
+                console.warn("Polling error (retrying):", pollError);
+            }
             
             console.log(`Checking video status (${attempts}/${maxAttempts})...`, operation.metadata?.state);
             
@@ -139,7 +193,11 @@ export const sendMessageToGemini = async (
         lowerMsg.includes('veo') || lowerMsg.includes('снять видео');
     
     // 2. Image Detection
-    const imageKeywords = ['нарисуй', 'изобрази', 'сгенерируй фото', 'сгенерируй изображение', 'картинку', 'draw', 'paint', 'generate image', 'picture of', 'photo of'];
+    // Expanded keywords for better detection
+    const imageKeywords = [
+        'нарисуй', 'изобрази', 'сгенерируй фото', 'сгенерируй изображение', 'картинку', 'фото', 
+        'draw', 'paint', 'generate image', 'picture of', 'photo of', 'create image', 'make a picture'
+    ];
     const isImageRequest = imageKeywords.some(k => lowerMsg.includes(k));
 
     if (isVideoRequest && message.length > 5) {
@@ -163,7 +221,7 @@ export const sendMessageToGemini = async (
 
         if (imageAttachment) {
              return {
-                text: "🎨 Вот изображение по вашему запросу (Imagen 3).",
+                text: "🎨 Вот изображение по вашему запросу.",
                 attachments: [imageAttachment]
             };
         } else {
