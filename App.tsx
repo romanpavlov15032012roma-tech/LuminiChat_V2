@@ -282,14 +282,31 @@ const App: React.FC = () => {
         const currentChat = chats.find(c => c.id === selectedChatId);
         const isAiChat = currentChat?.participantIds.includes(AI_USER.id) && !currentChat.isGroup;
 
-        if (isAiChat && text.trim()) {
+        if (isAiChat && (text.trim() || attachments.length > 0)) {
             const history = activeMessages.map(m => ({ role: m.senderId === AI_USER.id ? 'model' as const : 'user' as const, parts: [{ text: m.text }] }));
-            history.push({ role: 'user', parts: [{ text }] });
+            if (text) history.push({ role: 'user', parts: [{ text }] });
+            
             try {
-                const aiResponseText = await sendMessageToGemini(text, history);
-                const aiMessageData = { senderId: AI_USER.id, text: aiResponseText, timestamp: Timestamp.now(), status: 'read', attachments: [] };
+                // Now returns object with { text, attachments }
+                const aiResponse = await sendMessageToGemini(text, history);
+                
+                const aiMessageData = { 
+                    senderId: AI_USER.id, 
+                    text: aiResponse.text, 
+                    timestamp: Timestamp.now(), 
+                    status: 'read', 
+                    attachments: aiResponse.attachments 
+                };
+                
                 await addDoc(collection(db, "chats", selectedChatId, "messages"), aiMessageData);
-                await updateDoc(doc(db, "chats", selectedChatId), { lastMessage: aiMessageData, updatedAt: Timestamp.now() });
+                
+                // For preview in sidebar, we strip large base64 URLs from the lastMessage
+                const aiPreviewAttachments = aiResponse.attachments.map(a => ({...a, url: ''}));
+                
+                await updateDoc(doc(db, "chats", selectedChatId), { 
+                    lastMessage: { ...aiMessageData, attachments: aiPreviewAttachments }, 
+                    updatedAt: Timestamp.now() 
+                });
             } catch (e) { console.error("AI Error", e); }
         }
     } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); }

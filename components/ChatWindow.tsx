@@ -50,6 +50,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
   const [selectedFiles, setSelectedFiles] = useState<Attachment[]>([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+  const [activeReactionMessageId, setActiveReactionMessageId] = useState<string | null>(null); // New state for click-triggered reactions
   const [playingVideoId, setPlayingVideoId] = useState<string | null>(null);
   
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -104,6 +105,22 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
           editInputRef.current.focus();
       }
   }, [editingMessageId]);
+
+  // Click outside listener for emoji picker
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (activeReactionMessageId) {
+        const target = event.target as HTMLElement;
+        // If click is not inside the reaction menu, close it
+        if (!target.closest('.reaction-menu-container') && !target.closest('.reaction-trigger-btn')) {
+          setActiveReactionMessageId(null);
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [activeReactionMessageId]);
 
   useEffect(() => {
       if (callStatus !== 'idle' && localVideoRef.current && localStream.current) {
@@ -493,6 +510,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
       }
   };
 
+  const toggleEmojiPicker = (messageId: string) => {
+    if (activeReactionMessageId === messageId) {
+      setActiveReactionMessageId(null);
+    } else {
+      setActiveReactionMessageId(messageId);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-[#0B1120] relative overflow-hidden transition-colors duration-200">
       
@@ -584,6 +609,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
           const showAvatar = !isMe && (index === 0 || messages[index - 1].senderId !== msg.senderId);
           const isHovered = hoveredMessageId === msg.id;
           const isEditingThis = editingMessageId === msg.id;
+          const isReactionPickerOpen = activeReactionMessageId === msg.id;
 
           return (
             <div 
@@ -649,14 +675,42 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, currentU
                           ))}
                       </div>
                   )}
-                  <div className={`absolute top-2 transition-opacity duration-200 z-50 ${isMe ? '-left-16' : '-right-8'} ${isHovered ? 'opacity-100' : 'opacity-0'}`}>
-                      <div className="flex gap-1">
-                          {isMe && <button onClick={() => startEditing(msg)} className="p-1.5 rounded-full bg-white dark:bg-slate-800 shadow-sm border"><Pencil size={14} /></button>}
-                          <div className="relative group/reaction">
-                              <button className="p-1.5 rounded-full bg-white dark:bg-slate-800 shadow-sm border"><Smile size={14} /></button>
-                              <div className={`absolute bottom-full mb-2 hidden group-hover/reaction:flex z-50 ${isMe ? 'right-0' : 'left-0'}`}>
-                                   <div className="bg-white dark:bg-slate-800 border rounded-full shadow-xl p-1.5 flex gap-1">{REACTION_EMOJIS.map(emoji => <button key={emoji} onClick={() => onReaction(msg.id, emoji)} className="w-8 h-8 rounded-full hover:bg-slate-100">{emoji}</button>)}</div>
-                              </div>
+                  {/* Reaction Button & Menu */}
+                  <div className={`absolute top-2 transition-opacity duration-200 z-50 ${isMe ? '-left-16' : '-right-8'} ${isHovered || isReactionPickerOpen ? 'opacity-100' : 'opacity-0'}`}>
+                      <div className="flex gap-1 relative">
+                          {isMe && <button onClick={() => startEditing(msg)} className="p-1.5 rounded-full bg-white dark:bg-slate-800 shadow-sm border border-slate-200 dark:border-slate-700"><Pencil size={14} /></button>}
+                          
+                          <div className="relative">
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleEmojiPicker(msg.id);
+                                }}
+                                className={`reaction-trigger-btn p-1.5 rounded-full shadow-sm border border-slate-200 dark:border-slate-700 ${isReactionPickerOpen ? 'bg-violet-100 text-violet-600 dark:bg-slate-700 dark:text-violet-400' : 'bg-white dark:bg-slate-800'}`}
+                              >
+                                <Smile size={14} />
+                              </button>
+                              
+                              {/* Popup Menu */}
+                              {isReactionPickerOpen && (
+                                <div className={`reaction-menu-container absolute bottom-full mb-2 z-50 ${isMe ? 'right-0' : 'left-0'} animate-fade-in`}>
+                                     <div className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-full shadow-xl p-1.5 flex gap-1">
+                                       {REACTION_EMOJIS.map(emoji => (
+                                         <button 
+                                            key={emoji} 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              onReaction(msg.id, emoji);
+                                              setActiveReactionMessageId(null);
+                                            }} 
+                                            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-lg"
+                                         >
+                                            {emoji}
+                                         </button>
+                                       ))}
+                                     </div>
+                                </div>
+                              )}
                           </div>
                       </div>
                   </div>
