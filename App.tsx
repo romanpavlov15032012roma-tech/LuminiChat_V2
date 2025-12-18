@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
@@ -73,6 +74,32 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  // GLOBAL CALL LISTENER
+  useEffect(() => {
+    if (!currentUser || !isFirebaseConfigured) return;
+    const q = query(collection(db, "calls"), where("type", "==", "offer"));
+    const unsub = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach(change => {
+        if (change.type === 'added') {
+          const callData = change.doc.data();
+          if (callData.callerId !== currentUser.id) {
+            // If the user is a participant in this chat (doc id is chat id)
+            getDoc(doc(db, "chats", change.doc.id)).then(chatSnap => {
+              if (chatSnap.exists() && chatSnap.data().participantIds.includes(currentUser.id)) {
+                if (selectedChatId !== change.doc.id) {
+                  setSelectedChatId(change.doc.id);
+                  setIsMobileChatOpen(true);
+                  sendNotification("Входящий вызов", "Вам звонят в Lumini");
+                }
+              }
+            });
+          }
+        }
+      });
+    });
+    return () => unsub();
+  }, [currentUser, selectedChatId]);
+
   useEffect(() => {
       if (!currentUser || !isFirebaseConfigured) return;
       const userRef = doc(db, "users", currentUser.id);
@@ -107,22 +134,8 @@ const App: React.FC = () => {
       if (!isFirebaseConfigured || !currentUser) return;
       const q = query(collection(db, "chats"), where("participantIds", "array-contains", currentUser.id));
       const unsubscribe = onSnapshot(q, async (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-              if (change.type === 'modified') {
-                  const chatData = change.doc.data();
-                  const lastMsg = chatData.lastMessage as Message | undefined;
-                  if (lastMsg && lastMsg.senderId !== currentUser.id && (Math.abs(Date.now() - (lastMsg.timestamp?.toDate ? lastMsg.timestamp.toDate().getTime() : Date.now())) < 5000)) {
-                      const isChatOpen = selectedChatId === change.doc.id;
-                      if (!isChatOpen || document.hidden) {
-                          sendNotification(chatData.isGroup ? chatData.groupName : "Новое сообщение", lastMsg.text || 'Вложение');
-                      }
-                  }
-              }
-          });
-
           const loadedDataPromises = snapshot.docs.map(async (chatDoc) => {
               const chatData = chatDoc.data();
-              const otherUserId = chatData.participantIds.find((id: string) => id !== currentUser.id);
               let participants: User[] = [];
               
               if (chatData.isGroup) {
@@ -135,6 +148,7 @@ const App: React.FC = () => {
                   });
                   participants = await Promise.all(promises);
               } else {
+                  const otherUserId = chatData.participantIds.find((id: string) => id !== currentUser.id);
                   if (otherUserId === AI_USER.id) {
                       participants = [AI_USER];
                   } else if (otherUserId) {
@@ -162,17 +176,13 @@ const App: React.FC = () => {
                   };
               }
               
-              // Calculate typing status
               let isTyping = false;
               if (chatData.typing) {
                  const now = Date.now();
-                 // Check if any USER ID other than current user has typed in last 5 seconds
                  Object.entries(chatData.typing).forEach(([uid, ts]: [string, any]) => {
                      if (uid !== currentUser.id) {
                          const date = ts?.toDate ? ts.toDate() : new Date(ts);
-                         if (now - date.getTime() < 5000) {
-                             isTyping = true;
-                         }
+                         if (now - date.getTime() < 5000) isTyping = true;
                      }
                  });
               }
@@ -218,134 +228,34 @@ const App: React.FC = () => {
       return () => unsubscribe();
   }, [selectedChatId]);
 
-  useEffect(() => {
-      if (!isFirebaseConfigured || !searchQuery) { setOtherUsers([]); return; }
-      const searchUsers = async () => {
-          try {
-              const querySnapshot = await getDocs(collection(db, "users"));
-              const matches: User[] = [];
-              querySnapshot.forEach(doc => {
-                  const u = doc.data() as User;
-                  if (u.id === currentUser?.id) return;
-                  const q = searchQuery.toLowerCase();
-                  if ((u.name && u.name.toLowerCase().includes(q)) || (u.phoneNumber && u.phoneNumber.includes(q)) || (u.uniqueCode && u.uniqueCode.includes(q))) { matches.push(u); }
-              });
-              const existingChatPartnerIds = new Set(chats.flatMap(c => c.participantIds.filter(id => id !== currentUser?.id)));
-              setOtherUsers(matches.filter(u => !existingChatPartnerIds.has(u.id)));
-          } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); }
-      };
-      const timer = setTimeout(searchUsers, 500);
-      return () => clearTimeout(timer);
-  }, [searchQuery, chats, currentUser]);
-
-  const handleLogin = (user: User) => { /* Handled by AuthState */ };
-  const handleUpdateProfile = (updatedUser: User) => { setCurrentUser(updatedUser); };
   const handleLogout = async () => { if (currentUser) { try { await updateDoc(doc(db, "users", currentUser.id), { isOnline: false }); } catch(e) {} } await signOut(auth); setSelectedChatId(null); setIsMobileChatOpen(false); setIsProfileOpen(false); };
   const handleSelectChat = (chatId: string) => { setSelectedChatId(chatId); setIsMobileChatOpen(true); setSearchQuery(''); };
   const handleBackToSidebar = () => { setIsMobileChatOpen(false); setTimeout(() => setSelectedChatId(null), 300); };
-  
-  const handleStartChat = async (user: User) => {
-      if (!currentUser) return;
-      const existing = chats.find(c => !c.isGroup && c.participantIds.includes(user.id));
-      if (existing) { handleSelectChat(existing.id); return; }
-      const newChatData = { participantIds: [currentUser.id, user.id], updatedAt: Timestamp.now(), lastMessage: null };
-      try { const docRef = await addDoc(collection(db, "chats"), newChatData); handleSelectChat(docRef.id); } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); }
-  };
-
-  const handleCreateGroup = async (name: string, participantIds: string[], avatar?: string) => {
-      if (!currentUser) return;
-      const allParticipants = [currentUser.id, ...participantIds];
-      
-      const newGroupData = {
-          isGroup: true,
-          groupName: name,
-          groupAvatar: avatar || '',
-          adminIds: [currentUser.id],
-          participantIds: allParticipants,
-          updatedAt: Timestamp.now(),
-          lastMessage: {
-              id: 'system_create',
-              senderId: 'system',
-              text: `Группа "${name}" создана`,
-              timestamp: Timestamp.now(),
-              status: 'read'
-          }
-      };
-
-      try {
-          const docRef = await addDoc(collection(db, "chats"), newGroupData);
-          setIsCreateGroupOpen(false);
-          handleSelectChat(docRef.id);
-      } catch (e: any) {
-          console.error("Group creation error", e);
-          if (e.code === 'permission-denied') setPermissionError(true);
-      }
-  };
-
-  const handleDeleteChat = async (chatId: string) => {
-      if (!window.confirm("Вы уверены?")) return;
-      try { await deleteDoc(doc(db, "chats", chatId)); if (selectedChatId === chatId) { setSelectedChatId(null); setIsMobileChatOpen(false); } } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); }
-  };
-
+  const handleStartChat = async (user: User) => { if (!currentUser) return; const existing = chats.find(c => !c.isGroup && c.participantIds.includes(user.id)); if (existing) { handleSelectChat(existing.id); return; } const newChatData = { participantIds: [currentUser.id, user.id], updatedAt: Timestamp.now(), lastMessage: null }; try { const docRef = await addDoc(collection(db, "chats"), newChatData); handleSelectChat(docRef.id); } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); } };
   const handleSendMessage = async (text: string, attachments: Attachment[] = []) => {
     if (!selectedChatId || !currentUser) return;
     const newMessageData = { senderId: currentUser.id, text: text, timestamp: Timestamp.now(), status: 'sent', attachments: attachments, reactions: [] };
     try {
         await addDoc(collection(db, "chats", selectedChatId, "messages"), newMessageData);
-        const previewAttachments = attachments.map(a => ({ ...a, url: '' }));
-        await updateDoc(doc(db, "chats", selectedChatId), { lastMessage: { ...newMessageData, attachments: previewAttachments }, updatedAt: Timestamp.now() });
-        
+        await updateDoc(doc(db, "chats", selectedChatId), { lastMessage: { ...newMessageData, attachments: attachments.map(a => ({...a, url: ''})) }, updatedAt: Timestamp.now() });
         const currentChat = chats.find(c => c.id === selectedChatId);
-        const isAiChat = currentChat?.participantIds.includes(AI_USER.id) && !currentChat.isGroup;
-
-        if (isAiChat && (text.trim() || attachments.length > 0)) {
+        if (currentChat?.participantIds.includes(AI_USER.id) && !currentChat.isGroup) {
             const history = activeMessages.map(m => ({ role: m.senderId === AI_USER.id ? 'model' as const : 'user' as const, parts: [{ text: m.text }] }));
-            // Note: We don't push the current message text to history here because sendMessageToGemini adds it as the 'current' prompt.
-            
-            try {
-                // Pass attachments so the AI can "see" images or "read" files
-                const aiResponse = await sendMessageToGemini(text, history, attachments);
-                
-                const aiMessageData = { 
-                    senderId: AI_USER.id, 
-                    text: aiResponse.text, 
-                    timestamp: Timestamp.now(), 
-                    status: 'read', 
-                    attachments: aiResponse.attachments 
-                };
-                
-                await addDoc(collection(db, "chats", selectedChatId, "messages"), aiMessageData);
-                
-                // For preview in sidebar, we strip large base64 URLs from the lastMessage
-                const aiPreviewAttachments = aiResponse.attachments.map(a => ({...a, url: ''}));
-                
-                await updateDoc(doc(db, "chats", selectedChatId), { 
-                    lastMessage: { ...aiMessageData, attachments: aiPreviewAttachments }, 
-                    updatedAt: Timestamp.now() 
-                });
-            } catch (e) { 
-                console.error("AI Error", e); 
-                // Alert for common AI generation errors if useful
-            }
+            const aiResponse = await sendMessageToGemini(text, history, attachments);
+            const aiMessageData = { senderId: AI_USER.id, text: aiResponse.text, timestamp: Timestamp.now(), status: 'read', attachments: aiResponse.attachments };
+            await addDoc(collection(db, "chats", selectedChatId, "messages"), aiMessageData);
+            await updateDoc(doc(db, "chats", selectedChatId), { lastMessage: { ...aiMessageData, attachments: aiResponse.attachments.map(a => ({...a, url: ''})) }, updatedAt: Timestamp.now() });
         }
-    } catch (e: any) { 
-        console.error("Send message error:", e);
-        if (e.code === 'permission-denied') setPermissionError(true);
-        // Alert if message size is too big (likely due to base64 image/video)
-        if (e.code === 'invalid-argument' && e.message.includes('exceeds the maximum allowed size')) {
-            alert("Файл слишком большой для отправки. Попробуйте сжать изображение.");
-        }
-    }
+    } catch (e: any) { console.error(e); }
   };
 
-  const handleEditMessage = async (messageId: string, newText: string) => { if (!selectedChatId) return; try { const msgRef = doc(db, "chats", selectedChatId, "messages", messageId); await updateDoc(msgRef, { text: newText, isEdited: true }); } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); } };
-  const handleReaction = async (messageId: string, emoji: string) => { if (!selectedChatId || !currentUser) return; const msg = activeMessages.find(m => m.id === messageId); if (!msg) return; let newReactions = msg.reactions || []; const userReactionIndex = newReactions.findIndex(r => r.emoji === emoji && r.userId === currentUser.id); if (userReactionIndex >= 0) { newReactions.splice(userReactionIndex, 1); } else { newReactions.push({ emoji, userId: currentUser.id, count: 1 }); } try { const msgRef = doc(db, "chats", selectedChatId, "messages", messageId); await updateDoc(msgRef, { reactions: newReactions }); } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); } };
-  const handleViewProfile = (user: User) => { setViewingUser(user); };
+  const handleEditMessage = async (messageId: string, newText: string) => { if (!selectedChatId) return; try { await updateDoc(doc(db, "chats", selectedChatId, "messages", messageId), { text: newText, isEdited: true }); } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); } };
+  const handleReaction = async (messageId: string, emoji: string) => { if (!selectedChatId || !currentUser) return; const msg = activeMessages.find(m => m.id === messageId); if (!msg) return; let newReactions = msg.reactions || []; const idx = newReactions.findIndex(r => r.emoji === emoji && r.userId === currentUser.id); if (idx >= 0) newReactions.splice(idx, 1); else newReactions.push({ emoji, userId: currentUser.id, count: 1 }); try { await updateDoc(doc(db, "chats", selectedChatId, "messages", messageId), { reactions: newReactions }); } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); } };
 
   if (showDevSetup) return <FirebaseSetup onBack={() => setShowDevSetup(false)} />;
   if (permissionError) return <PermissionError />;
   if (loading) return <div className="h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-violet-500 rounded-full border-t-transparent"></div></div>;
-  if (!currentUser) return <AuthScreen onLogin={handleLogin} onOpenDevSettings={() => setShowDevSetup(true)} />;
+  if (!currentUser) return <AuthScreen onLogin={() => {}} onOpenDevSettings={() => setShowDevSetup(true)} />;
 
   const selectedChat = chats.find((c) => c.id === selectedChatId) || null;
 
@@ -355,13 +265,13 @@ const App: React.FC = () => {
         <Sidebar 
           chats={chats} currentUser={currentUser} selectedChatId={selectedChatId} onSelectChat={handleSelectChat}
           onOpenProfile={() => setIsProfileOpen(true)} className="w-full" searchQuery={searchQuery} onSearchChange={setSearchQuery} otherUsers={otherUsers}
-          onStartChat={handleStartChat} onOpenGame={() => setIsGameOpen(true)} onDeleteChat={handleDeleteChat}
+          onStartChat={handleStartChat} onOpenGame={() => setIsGameOpen(true)} onDeleteChat={() => {}}
           onCreateGroup={() => setIsCreateGroupOpen(true)}
         />
       </div>
       <div className={`flex-1 h-full relative ${!isMobileChatOpen ? 'hidden md:flex' : 'flex'}`}>
         {selectedChat ? (
-          <ChatWindow chat={selectedChat} messages={activeMessages} currentUser={currentUser} onSendMessage={handleSendMessage} onEditMessage={handleEditMessage} onBack={handleBackToSidebar} onReaction={handleReaction} onViewProfile={handleViewProfile} />
+          <ChatWindow chat={selectedChat} messages={activeMessages} currentUser={currentUser} onSendMessage={handleSendMessage} onEditMessage={handleEditMessage} onBack={handleBackToSidebar} onReaction={handleReaction} onViewProfile={setViewingUser} />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 text-center p-4">
               <div className="w-24 h-24 bg-violet-100 dark:bg-violet-900/20 rounded-full flex items-center justify-center mb-6 animate-pulse-ring"><span className="text-4xl">👋</span></div>
@@ -370,10 +280,10 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
-      {isProfileOpen && <ProfileModal user={currentUser} onUpdate={handleUpdateProfile} onLogout={handleLogout} onClose={() => setIsProfileOpen(false)} isDarkMode={isDarkMode} toggleTheme={toggleTheme} />}
+      {isProfileOpen && <ProfileModal user={currentUser} onUpdate={setCurrentUser} onLogout={handleLogout} onClose={() => setIsProfileOpen(false)} isDarkMode={isDarkMode} toggleTheme={toggleTheme} />}
       {viewingUser && <ProfileModal user={viewingUser} onClose={() => setViewingUser(null)} isDarkMode={isDarkMode} toggleTheme={toggleTheme} isReadOnly={true} />}
       {isGameOpen && <SnakeGameModal onClose={() => setIsGameOpen(false)} />}
-      {isCreateGroupOpen && <CreateGroupModal currentUser={currentUser} onClose={() => setIsCreateGroupOpen(false)} onCreate={handleCreateGroup} />}
+      {isCreateGroupOpen && <CreateGroupModal currentUser={currentUser} onClose={() => setIsCreateGroupOpen(false)} onCreate={() => {}} />}
     </div>
   );
 };
