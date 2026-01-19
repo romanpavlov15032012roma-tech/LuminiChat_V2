@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { User } from '../types';
 import { Sparkles, ArrowRight, Lock, AlertCircle, Database } from 'lucide-react';
@@ -48,6 +49,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onOpenDevSettin
                 phoneNumber: phoneNumber,
                 uniqueCode: uniqueCode,
                 avatar: avatar,
+                bio: 'Привет! Я использую Lumini Chat.',
                 isOnline: true
             };
 
@@ -77,6 +79,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onOpenDevSettin
                     name: firebaseUser.displayName || 'User',
                     email: firebaseUser.email || '',
                     avatar: firebaseUser.photoURL || '',
+                    bio: 'Привет! Я использую Lumini Chat.',
                     isOnline: true
                 };
                 await setDoc(doc(db, "users", firebaseUser.uid), fallbackUser);

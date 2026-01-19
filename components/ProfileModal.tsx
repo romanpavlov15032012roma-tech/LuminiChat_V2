@@ -1,6 +1,7 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { User } from '../types';
-import { X, Camera, Save, LogOut, Moon, Sun, Copy, Check, Hash, Mail, Phone, Calendar, AlertTriangle } from 'lucide-react';
+import { X, Camera, Save, LogOut, Moon, Sun, Copy, Check, Hash, Mail, Phone, AlertTriangle, Info } from 'lucide-react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../src/firebase';
 
@@ -25,6 +26,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 }) => {
   const [name, setName] = useState(user.name);
   const [avatar, setAvatar] = useState(user.avatar);
+  const [bio, setBio] = useState(user.bio || '');
   const [isSaving, setIsSaving] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -34,6 +36,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   useEffect(() => {
       setName(user.name);
       setAvatar(user.avatar);
+      setBio(user.bio || '');
   }, [user]);
 
   const handleSave = async () => {
@@ -41,14 +44,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     
     setIsSaving(true);
     try {
-        const updatedData = { name, avatar };
+        const updatedData = { name, avatar, bio };
         
         // Update in Firestore
         const userRef = doc(db, "users", user.id);
         await updateDoc(userRef, updatedData);
         
         // Update Local State
-        onUpdate({ ...user, name, avatar });
+        onUpdate({ ...user, name, avatar, bio });
         onClose();
     } catch (error) {
         console.error("Error updating profile:", error);
@@ -83,7 +86,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-opacity animate-fade-in">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-3xl w-full max-w-sm shadow-2xl relative overflow-hidden transition-colors duration-200 transform transition-all scale-100">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-3xl w-full max-w-sm shadow-2xl relative overflow-hidden transition-colors duration-200 transform transition-all scale-100 max-h-[90vh] overflow-y-auto custom-scrollbar">
         
         {/* Header Background */}
         <div className={`h-32 relative ${isReadOnly ? 'bg-slate-700 dark:bg-slate-800' : 'bg-gradient-to-r from-violet-600 to-indigo-600'}`}>
@@ -123,6 +126,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         className="bg-transparent text-center border-b border-transparent hover:border-slate-300 focus:border-violet-500 focus:outline-none w-full"
+                        placeholder="Ваше имя"
                     />
                 )}
             </h2>
@@ -135,6 +139,26 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         {/* Info Grid */}
         <div className="px-6 pb-6 space-y-4">
             
+            {/* Bio Section */}
+            <div className="space-y-1">
+                <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-wider">
+                    <Info size={12} />
+                    <span>О себе</span>
+                </div>
+                {isReadOnly ? (
+                     <p className="text-slate-700 dark:text-slate-300 text-sm italic bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-700/50">
+                        {bio || 'Информация отсутствует'}
+                     </p>
+                ) : (
+                    <textarea 
+                        value={bio}
+                        onChange={(e) => setBio(e.target.value)}
+                        placeholder="Расскажите о себе..."
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all resize-none h-20"
+                    />
+                )}
+            </div>
+
             {/* Unique Code */}
             <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between">
                 <div className="flex items-center gap-3">

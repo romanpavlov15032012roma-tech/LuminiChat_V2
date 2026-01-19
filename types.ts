@@ -6,6 +6,7 @@ export interface User {
   email?: string;
   phoneNumber?: string;
   uniqueCode?: string;
+  bio?: string; // Description/Status
   isOnline: boolean;
   isAi?: boolean;
 }
