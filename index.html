@@ -16,11 +16,15 @@
           extend: {
             colors: {
               slate: {
-                850: '#1e293b', // Custom dark shade if needed
+                850: '#1e293b',
+                925: '#0f172a',
               }
             },
             animation: {
               'message-in': 'messageIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+              'slide-in-left': 'slideInLeft 0.3s ease-out forwards',
+              'zoom-in': 'zoomIn 0.2s ease-out forwards',
+              'fade-in-up': 'fadeInUp 0.5s ease-out forwards',
             }
           }
         }
@@ -30,58 +34,52 @@
     <style>
       body {
         font-family: 'Inter', sans-serif;
-        overscroll-behavior: none; /* Prevents bounce on Mac/iOS */
+        overscroll-behavior: none;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
-      /* Custom Scrollbar */
+      
+      /* Custom Premium Scrollbar */
       ::-webkit-scrollbar {
-        width: 6px;
+        width: 5px;
       }
       ::-webkit-scrollbar-track {
         background: transparent;
       }
       ::-webkit-scrollbar-thumb {
-        background: #cbd5e1; /* Slate 300 for light */
-        border-radius: 3px;
+        background: rgba(148, 163, 184, 0.3);
+        border-radius: 10px;
+        transition: background 0.2s;
       }
       .dark ::-webkit-scrollbar-thumb {
-        background: #334155; /* Slate 700 for dark */
+        background: rgba(71, 85, 105, 0.3);
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #94a3b8;
+        background: rgba(148, 163, 184, 0.6);
       }
       .dark ::-webkit-scrollbar-thumb:hover {
-        background: #475569;
+        background: rgba(71, 85, 105, 0.6);
       }
 
       /* Animations */
-      @keyframes slideUp {
-        from { opacity: 0; transform: translateY(10px); }
+      @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(15px); }
         to { opacity: 1; transform: translateY(0); }
       }
-      .animate-slide-up {
-        animation: slideUp 0.3s ease-out forwards;
-      }
       
+      @keyframes slideInLeft {
+        from { opacity: 0; transform: translateX(-20px); }
+        to { opacity: 1; transform: translateX(0); }
+      }
+
       @keyframes messageIn {
-        from { 
-          opacity: 0; 
-          transform: translateY(8px) scale(0.98); 
-        }
-        to { 
-          opacity: 1; 
-          transform: translateY(0) scale(1); 
-        }
+        from { opacity: 0; transform: translateY(10px) scale(0.95); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
       }
-      .animate-message-in {
-        animation: messageIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-      }
-      
-      @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-      }
-      .animate-fade-in {
-        animation: fadeIn 0.3s ease-out forwards;
+
+      @keyframes zoomIn {
+        from { opacity: 0; transform: scale(0.95); }
+        to { opacity: 1; transform: scale(1); }
       }
 
       @keyframes pulse-ring {
@@ -91,6 +89,13 @@
       .animate-pulse-ring {
         animation: pulse-ring 3s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
       }
+
+      /* Staggered Animation Helper */
+      .stagger-1 { animation-delay: 50ms; }
+      .stagger-2 { animation-delay: 100ms; }
+      .stagger-3 { animation-delay: 150ms; }
+      .stagger-4 { animation-delay: 200ms; }
+      .stagger-5 { animation-delay: 250ms; }
     </style>
 <script type="importmap">
 {
@@ -107,9 +112,8 @@
 }
 </script>
 </head>
-  <body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-50 transition-colors duration-200">
+  <body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-50 transition-colors duration-300 ease-in-out">
     <div id="root"></div>
-    <!-- Vite Entry Point -->
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>

@@ -14,7 +14,7 @@ import { auth, db, isFirebaseConfigured } from './src/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { 
   collection, query, where, onSnapshot, orderBy, 
-  addDoc, doc, updateDoc, getDoc, getDocs, setDoc, Timestamp, deleteDoc 
+  addDoc, doc, updateDoc, getDoc, getDocs, setDoc, Timestamp, deleteDoc, limit 
 } from 'firebase/firestore';
 import { AI_USER, NOTIFICATION_SOUND } from './constants';
 
@@ -74,6 +74,41 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  // Search Logic
+  useEffect(() => {
+    if (!searchQuery.trim() || !currentUser) {
+        setOtherUsers([]);
+        return;
+    }
+    const delayDebounceFn = setTimeout(async () => {
+        try {
+            // Simple approach: fetch all users and filter client side for better UX with small dataset
+            // For production, use Algolia or proper Firestore queries
+            const q = query(collection(db, "users"), limit(50));
+            const snapshot = await getDocs(q);
+            const results: User[] = [];
+            const term = searchQuery.toLowerCase();
+            
+            snapshot.forEach(doc => {
+                const u = doc.data() as User;
+                // Exclude current user and already chatted users (optional, but good for UX)
+                if (u.id === currentUser.id) return;
+                
+                const matchesName = u.name.toLowerCase().includes(term);
+                const matchesPhone = u.phoneNumber?.includes(term);
+                const matchesCode = u.uniqueCode?.includes(term);
+
+                if (matchesName || matchesPhone || matchesCode) {
+                    results.push(u);
+                }
+            });
+            setOtherUsers(results);
+        } catch (e) { console.error("Search error", e); }
+    }, 300);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchQuery, currentUser]);
+
   // GLOBAL CALL LISTENER
   useEffect(() => {
     if (!currentUser || !isFirebaseConfigured) return;
@@ -83,7 +118,6 @@ const App: React.FC = () => {
         if (change.type === 'added') {
           const callData = change.doc.data();
           if (callData.callerId !== currentUser.id) {
-            // If the user is a participant in this chat (doc id is chat id)
             getDoc(doc(db, "chats", change.doc.id)).then(chatSnap => {
               if (chatSnap.exists() && chatSnap.data().participantIds.includes(currentUser.id)) {
                 if (selectedChatId !== change.doc.id) {
@@ -229,9 +263,38 @@ const App: React.FC = () => {
   }, [selectedChatId]);
 
   const handleLogout = async () => { if (currentUser) { try { await updateDoc(doc(db, "users", currentUser.id), { isOnline: false }); } catch(e) {} } await signOut(auth); setSelectedChatId(null); setIsMobileChatOpen(false); setIsProfileOpen(false); };
-  const handleSelectChat = (chatId: string) => { setSelectedChatId(chatId); setIsMobileChatOpen(true); setSearchQuery(''); };
+  const handleSelectChat = (chatId: string) => { setSelectedChatId(chatId); setIsMobileChatOpen(true); setSearchQuery(''); setOtherUsers([]); };
   const handleBackToSidebar = () => { setIsMobileChatOpen(false); setTimeout(() => setSelectedChatId(null), 300); };
-  const handleStartChat = async (user: User) => { if (!currentUser) return; const existing = chats.find(c => !c.isGroup && c.participantIds.includes(user.id)); if (existing) { handleSelectChat(existing.id); return; } const newChatData = { participantIds: [currentUser.id, user.id], updatedAt: Timestamp.now(), lastMessage: null }; try { const docRef = await addDoc(collection(db, "chats"), newChatData); handleSelectChat(docRef.id); } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); } };
+  
+  const handleStartChat = async (user: User) => { 
+      if (!currentUser) return; 
+      // Check existing
+      const existing = chats.find(c => !c.isGroup && c.participantIds.includes(user.id)); 
+      if (existing) { 
+          handleSelectChat(existing.id); 
+          return; 
+      } 
+      const newChatData = { participantIds: [currentUser.id, user.id], updatedAt: Timestamp.now(), lastMessage: null }; 
+      try { 
+          const docRef = await addDoc(collection(db, "chats"), newChatData); 
+          handleSelectChat(docRef.id); 
+      } catch (e: any) { if (e.code === 'permission-denied') setPermissionError(true); } 
+  };
+  
+  const handleDeleteChat = async (chatId: string) => {
+      if (!window.confirm("Вы уверены, что хотите удалить этот чат? Это действие необратимо.")) return;
+      try {
+          if (selectedChatId === chatId) {
+              setSelectedChatId(null);
+              setIsMobileChatOpen(false);
+          }
+          await deleteDoc(doc(db, "chats", chatId));
+          // Optionally delete subcollection messages (Firestore requires cloud function or manual recursion for deep delete, usually not strictly enforced in frontend demos)
+      } catch (e) {
+          console.error("Error deleting chat", e);
+      }
+  };
+
   const handleSendMessage = async (text: string, attachments: Attachment[] = []) => {
     if (!selectedChatId || !currentUser) return;
     const newMessageData = { senderId: currentUser.id, text: text, timestamp: Timestamp.now(), status: 'sent', attachments: attachments, reactions: [] };
@@ -260,12 +323,12 @@ const App: React.FC = () => {
   const selectedChat = chats.find((c) => c.id === selectedChatId) || null;
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden transition-colors duration-200">
-      <div className={`${isMobileChatOpen ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-96 flex-shrink-0 h-full`}>
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden transition-colors duration-200 font-sans">
+      <div className={`${isMobileChatOpen ? 'hidden md:flex' : 'flex'} w-full md:w-[360px] lg:w-[400px] flex-shrink-0 h-full shadow-xl z-20`}>
         <Sidebar 
           chats={chats} currentUser={currentUser} selectedChatId={selectedChatId} onSelectChat={handleSelectChat}
           onOpenProfile={() => setIsProfileOpen(true)} className="w-full" searchQuery={searchQuery} onSearchChange={setSearchQuery} otherUsers={otherUsers}
-          onStartChat={handleStartChat} onOpenGame={() => setIsGameOpen(true)} onDeleteChat={() => {}}
+          onStartChat={handleStartChat} onOpenGame={() => setIsGameOpen(true)} onDeleteChat={handleDeleteChat}
           onCreateGroup={() => setIsCreateGroupOpen(true)}
         />
       </div>
@@ -273,10 +336,14 @@ const App: React.FC = () => {
         {selectedChat ? (
           <ChatWindow chat={selectedChat} messages={activeMessages} currentUser={currentUser} onSendMessage={handleSendMessage} onEditMessage={handleEditMessage} onBack={handleBackToSidebar} onReaction={handleReaction} onViewProfile={setViewingUser} />
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 text-center p-4">
-              <div className="w-24 h-24 bg-violet-100 dark:bg-violet-900/20 rounded-full flex items-center justify-center mb-6 animate-pulse-ring"><span className="text-4xl">👋</span></div>
-              <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Добро пожаловать в Lumini</h2>
-              <p className="text-slate-500 dark:text-slate-400 max-w-md">Выберите чат слева или создайте новую группу.</p>
+          <div className="flex-1 flex flex-col items-center justify-center bg-slate-50/50 dark:bg-slate-950/50 backdrop-blur-3xl text-center p-4">
+              <div className="w-32 h-32 bg-gradient-to-tr from-violet-600 to-indigo-600 rounded-[2rem] flex items-center justify-center mb-8 shadow-2xl shadow-violet-500/30 animate-pulse-ring">
+                 <span className="text-5xl">✨</span>
+              </div>
+              <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-3">Lumini Messenger</h2>
+              <p className="text-slate-500 dark:text-slate-400 max-w-md text-lg leading-relaxed">
+                Отправляйте сообщения, создавайте AR-контент с ИИ и общайтесь без границ.
+              </p>
           </div>
         )}
       </div>

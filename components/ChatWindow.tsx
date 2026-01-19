@@ -50,20 +50,22 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
   const canvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const hiddenVideoRef = useRef<HTMLVideoElement>(document.createElement('video'));
   const animationFrameRef = useRef<number | null>(null);
+  const lastDetectionTime = useRef<number>(0);
 
-  // 1. Load MediaPipe Scripts
+  // 1. Robust MediaPipe Script Loader
   useEffect(() => {
     const loadScripts = async () => {
       if (window.FaceLandmarker) return;
-      return new Promise<void>((resolve) => {
+      return new Promise<void>((resolve, reject) => {
         const script = document.createElement('script');
         script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js";
         script.async = true;
         script.onload = () => resolve();
+        script.onerror = () => reject();
         document.head.appendChild(script);
       });
     };
-    loadScripts();
+    loadScripts().catch(console.error);
   }, []);
 
   // 2. Signaling Listener
@@ -75,24 +77,18 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
         if (callStatus !== 'idle') hangUp();
         return;
       }
-
-      // Incoming Offer
       if (data.type === 'offer' && data.callerId !== currentUser.id && callStatus === 'idle') {
         setCallType(data.callType);
         setCallStatus('incoming');
       }
-
-      // Answer Received (on caller side)
       if (data.type === 'answer' && data.callerId === currentUser.id && peerConnection.current) {
         await peerConnection.current.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
         setCallStatus('connected');
       }
-
-      // Candidates
       if (data.candidates && peerConnection.current) {
         data.candidates.forEach((c: any) => {
           if (c.userId !== currentUser.id) {
-            peerConnection.current?.addIceCandidate(new RTCIceCandidate(c));
+            peerConnection.current?.addIceCandidate(new RTCIceCandidate(c)).catch(e => {});
           }
         });
       }
@@ -120,10 +116,11 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
     setIsAiLoading(false);
   };
 
-  const processVideoFrame = () => {
+  const processVideoFrame = (time: number) => {
     const video = hiddenVideoRef.current;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    
     if (video.readyState < 2 || !ctx) {
         animationFrameRef.current = requestAnimationFrame(processVideoFrame);
         return;
@@ -134,36 +131,75 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
         canvas.height = video.videoHeight;
     }
 
-    // Draw background
+    // Mirroring logic
     ctx.save();
     ctx.scale(-1, 1);
     ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
     ctx.restore();
 
-    if (activeMask !== 'none' && faceLandmarker.current) {
-        const results = faceLandmarker.current.detectForVideo(video, performance.now());
+    // Throttle AI detection to 30 FPS to reduce lag
+    const now = performance.now();
+    if (activeMask !== 'none' && faceLandmarker.current && (now - lastDetectionTime.current > 33)) {
+        lastDetectionTime.current = now;
+        const results = faceLandmarker.current.detectForVideo(video, now);
+        
         if (results.faceLandmarks?.[0]) {
             const landmarks = results.faceLandmarks[0];
-            const getPt = (idx: number) => ({ x: (1 - landmarks[idx].x) * canvas.width, y: landmarks[idx].y * canvas.height });
+            // Coordinate mapping considering mirror
+            const getPt = (idx: number) => ({ 
+              x: (1 - landmarks[idx].x) * canvas.width, 
+              y: landmarks[idx].y * canvas.height 
+            });
 
             if (activeMask === 'jaguar') {
                 const nose = getPt(1);
-                ctx.fillStyle = 'rgba(255, 140, 0, 0.7)';
-                ctx.beginPath(); ctx.arc(nose.x, nose.y, 20, 0, Math.PI*2); ctx.fill();
-                ctx.strokeStyle = 'black'; ctx.lineWidth = 3;
-                [[-10, 0], [10, 0]].forEach(([ox, oy]) => {
-                  ctx.beginPath(); ctx.moveTo(nose.x + ox, nose.y + oy); 
-                  ctx.lineTo(nose.x + (ox * 6), nose.y - 10); ctx.stroke();
+                const lEye = getPt(33);
+                const rEye = getPt(263);
+                
+                // Nose
+                const grad = ctx.createRadialGradient(nose.x, nose.y, 0, nose.x, nose.y, 25);
+                grad.addColorStop(0, '#ff8c00');
+                grad.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = grad;
+                ctx.beginPath(); ctx.arc(nose.x, nose.y, 25, 0, Math.PI*2); ctx.fill();
+                
+                // Whiskers
+                ctx.strokeStyle = 'white'; ctx.lineWidth = 3;
+                [[-15, 0], [15, 0]].forEach(([ox, oy]) => {
+                  for(let i=0; i<3; i++) {
+                    ctx.beginPath(); 
+                    ctx.moveTo(nose.x + ox, nose.y + oy + (i*5)); 
+                    ctx.lineTo(nose.x + (ox * 5), nose.y - 10 + (i*10)); 
+                    ctx.stroke();
+                  }
                 });
             } else if (activeMask === 'alien') {
-                ctx.fillStyle = 'black';
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
                 [33, 263].forEach(idx => {
                     const p = getPt(idx);
-                    ctx.beginPath(); ctx.ellipse(p.x, p.y, 30, 45, 0, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); 
+                    ctx.ellipse(p.x, p.y, 35, 55, Math.PI/12 * (idx === 33 ? -1 : 1), 0, Math.PI*2); 
+                    ctx.fill();
+                    // Reflection
+                    ctx.fillStyle = 'white';
+                    ctx.beginPath(); ctx.ellipse(p.x + 10, p.y - 20, 5, 10, 0, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = 'rgba(0,0,0,0.9)';
                 });
-            } else if (activeMask === 'matrix') {
-                ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+            } else if (activeMask === 'jedi') {
+                ctx.fillStyle = 'rgba(0, 255, 255, 0.15)';
                 ctx.fillRect(0,0, canvas.width, canvas.height);
+                ctx.strokeStyle = 'rgba(0, 255, 255, 0.5)';
+                ctx.lineWidth = 1;
+                for(let i=0; i<canvas.height; i+=8) {
+                  ctx.beginPath(); ctx.moveTo(0, i + (Math.sin(now/200)*5)); ctx.lineTo(canvas.width, i); ctx.stroke();
+                }
+            } else if (activeMask === 'thermal') {
+              ctx.globalCompositeOperation = 'difference';
+              ctx.fillStyle = 'white';
+              ctx.fillRect(0,0, canvas.width, canvas.height);
+              ctx.globalCompositeOperation = 'source-over';
+              ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+              ctx.fillRect(0,0, canvas.width, canvas.height);
             }
         }
     }
@@ -200,14 +236,17 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
     if (type === 'video') await initFaceLandmarker();
     
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: type === 'video', audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: type === 'video' ? { width: 1280, height: 720, frameRate: 30 } : false, 
+          audio: true 
+        });
         localStream.current = stream;
         
         if (type === 'video') {
             hiddenVideoRef.current.srcObject = stream;
             hiddenVideoRef.current.muted = true;
             await hiddenVideoRef.current.play();
-            processVideoFrame();
+            processVideoFrame(performance.now());
             const cStream = canvasRef.current.captureStream(30);
             cStream.addTrack(stream.getAudioTracks()[0]);
             processedStream.current = cStream;
@@ -216,10 +255,10 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
         }
 
         if (localVideoRef.current) localVideoRef.current.srcObject = processedStream.current;
-
-        const pc = createPC(processedStream.current!);
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        createPC(processedStream.current!);
+        
+        const offer = await peerConnection.current!.createOffer();
+        await peerConnection.current!.setLocalDescription(offer);
         await setDoc(doc(db, 'calls', chat.id), { 
           type: 'offer', 
           sdp: offer.sdp, 
@@ -235,14 +274,17 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
     setCallStatus('connected');
     
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: callType === 'video', audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: callType === 'video' ? { width: 1280, height: 720, frameRate: 30 } : false, 
+          audio: true 
+        });
         localStream.current = stream;
 
         if (callType === 'video') {
             hiddenVideoRef.current.srcObject = stream;
             hiddenVideoRef.current.muted = true;
             await hiddenVideoRef.current.play();
-            processVideoFrame();
+            processVideoFrame(performance.now());
             const cStream = canvasRef.current.captureStream(30);
             cStream.addTrack(stream.getAudioTracks()[0]);
             processedStream.current = cStream;
@@ -251,8 +293,8 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
         }
 
         if (localVideoRef.current) localVideoRef.current.srcObject = processedStream.current;
-
         const pc = createPC(processedStream.current!);
+        
         const snap = await getDoc(doc(db, 'calls', chat.id));
         const data = snap.data();
         await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data!.sdp }));
@@ -309,7 +351,7 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
                 </div>
               ))}
               <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-              <span className="text-[10px] opacity-60 block text-right mt-1">{msg.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+              <span className="text-[10px] opacity-60 block text-right mt-1">{msg.timestamp?.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
             </div>
           </div>
         ))}
@@ -337,11 +379,11 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
           <div className="fixed inset-0 z-[100] bg-slate-950 flex flex-col items-center justify-center p-4">
               {isAiLoading && <div className="absolute inset-0 z-[110] bg-black/80 flex flex-col items-center justify-center text-white gap-4">
                   <Loader2 size={48} className="animate-spin text-violet-500" />
-                  <p className="animate-pulse">Загрузка AR-модулей...</p>
+                  <p className="animate-pulse">Инициализация AR-движка...</p>
               </div>}
 
               {callStatus === 'incoming' ? (
-                <div className="bg-slate-900 p-8 rounded-3xl text-center space-y-6 animate-slide-up max-w-sm w-full">
+                <div className="bg-slate-900 p-8 rounded-3xl text-center space-y-6 animate-slide-up max-w-sm w-full shadow-2xl border border-slate-800">
                   <div className="w-24 h-24 rounded-full mx-auto relative">
                     <img src={chat.participants[0]?.avatar} className="w-full h-full rounded-full object-cover border-4 border-violet-500" />
                     <div className="absolute inset-0 animate-ping border-4 border-violet-500 rounded-full"></div>
@@ -349,26 +391,26 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
                   <h2 className="text-2xl font-bold text-white">Входящий {callType === 'video' ? 'видеозвонок' : 'звонок'}</h2>
                   <p className="text-slate-400">от {chat.participants[0]?.name}</p>
                   <div className="flex gap-4 justify-center">
-                    <button onClick={hangUp} className="p-5 bg-red-500 text-white rounded-full"><PhoneOff size={28}/></button>
-                    <button onClick={answerCall} className="p-5 bg-emerald-500 text-white rounded-full"><Phone size={28}/></button>
+                    <button onClick={hangUp} className="p-5 bg-red-500 text-white rounded-full transition-transform active:scale-90"><PhoneOff size={28}/></button>
+                    <button onClick={answerCall} className="p-5 bg-emerald-500 text-white rounded-full transition-transform active:scale-90"><Phone size={28}/></button>
                   </div>
                 </div>
               ) : (
                 <div className="w-full h-full relative flex flex-col">
-                    <div className="flex-1 relative bg-black rounded-3xl overflow-hidden shadow-2xl">
+                    <div className="flex-1 relative bg-black rounded-3xl overflow-hidden shadow-2xl border border-slate-800">
                         <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-contain" />
-                        {callType === 'video' && <video ref={localVideoRef} autoPlay muted playsInline className="absolute bottom-4 right-4 w-32 md:w-48 h-48 md:h-64 bg-slate-800 rounded-2xl object-cover border-2 border-white/20" />}
+                        {callType === 'video' && <video ref={localVideoRef} autoPlay muted playsInline className="absolute bottom-4 right-4 w-32 md:w-48 h-48 md:h-64 bg-slate-800 rounded-2xl object-cover border-2 border-white/20 shadow-xl" />}
                     </div>
                     <div className="mt-4 flex justify-center gap-6 p-4">
-                        {callType === 'video' && <button onClick={() => setShowMaskMenu(!showMaskMenu)} className={`p-4 rounded-full transition-colors ${showMaskMenu ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`}><Wand2 size={24}/></button>}
-                        <button onClick={hangUp} className="p-4 bg-red-500 text-white rounded-full shadow-lg"><PhoneOff size={32}/></button>
+                        {callType === 'video' && <button onClick={() => setShowMaskMenu(!showMaskMenu)} className={`p-4 rounded-full transition-all ${showMaskMenu ? 'bg-violet-600 text-white scale-110 shadow-lg shadow-violet-600/30' : 'bg-slate-800 text-slate-300'}`}><Wand2 size={24}/></button>}
+                        <button onClick={hangUp} className="p-4 bg-red-500 text-white rounded-full shadow-lg transition-transform active:scale-90"><PhoneOff size={32}/></button>
                     </div>
                     {showMaskMenu && (
-                        <div className="mt-4 flex gap-4 overflow-x-auto p-4 scrollbar-hide">
+                        <div className="mt-4 flex gap-4 overflow-x-auto p-4 scrollbar-hide bg-slate-900/50 backdrop-blur rounded-2xl border border-slate-800">
                             {MASKS.map(m => (
-                                <button key={m.id} onClick={() => setActiveMask(m.id)} className={`flex-shrink-0 flex flex-col items-center gap-1 p-3 rounded-2xl ${activeMask === m.id ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                                <button key={m.id} onClick={() => setActiveMask(m.id)} className={`flex-shrink-0 flex flex-col items-center gap-1 p-3 rounded-2xl transition-all ${activeMask === m.id ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
                                     {m.icon}
-                                    <span className="text-[10px]">{m.name}</span>
+                                    <span className="text-[10px] whitespace-nowrap">{m.name}</span>
                                 </button>
                             ))}
                         </div>
@@ -381,7 +423,7 @@ export const ChatWindow: React.FC<{ chat: Chat; messages: Message[]; currentUser
       {/* Lightbox */}
       {lightboxImage && (
           <div className="fixed inset-0 z-[200] bg-black/95 flex items-center justify-center p-4" onClick={() => setLightboxImage(null)}>
-              <img src={lightboxImage} className="max-w-full max-h-screen object-contain" />
+              <img src={lightboxImage} className="max-w-full max-h-screen object-contain animate-zoom-in" />
           </div>
       )}
     </div>
